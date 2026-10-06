@@ -15,7 +15,7 @@ $MSI      = Join-Path $ScriptDir 'assets\tailscale-setup-1.102.4-amd64.msi'
 $KeysDir  = Join-Path $ScriptDir 'keys'
 $AdminKeys= 'C:\ProgramData\ssh\administrators_authorized_keys'
 $script:GenKeyPath = $null   # 若本脚本代生成密钥对, 记录私钥路径, Finish 时打印 -i 连接命令
-$SCRIPT_ID = 'v0.3-win-20261006'
+$SCRIPT_ID = 'v0.5-win-20261006'
 
 function Banner($m){ Write-Host ''; Write-Host "==== $m ====" -ForegroundColor Cyan }
 
@@ -82,10 +82,15 @@ function Enable-SSHServer {
 # ---- 4. 部署控制端公钥 (免密) ----
 function Print-KeyHelp {
     Write-Host '      ── 如何在【控制端电脑】上拿到你的公钥 (复制输出整行) ──' -ForegroundColor DarkCyan
-    Write-Host '      ① 控制端是 Windows (PowerShell / CMD):' -ForegroundColor White
-    Write-Host '          type %USERPROFILE%\.ssh\id_ed25519.pub' -ForegroundColor Green
-    Write-Host '          若提示"找不到文件", 先生成密钥对 (一路回车即可):' -ForegroundColor Gray
-    Write-Host '          ssh-keygen -t ed25519 -N "" -f %USERPROFILE%\.ssh\id_ed25519' -ForegroundColor Green
+    Write-Host '      ① 控制端是 Windows:' -ForegroundColor White
+    Write-Host '         ▸ CMD (命令提示符):' -ForegroundColor Gray
+    Write-Host '             type %USERPROFILE%\.ssh\id_ed25519.pub' -ForegroundColor Green
+    Write-Host '             若提示找不到文件, 先生成:  ssh-keygen -t ed25519 -N "" -f %USERPROFILE%\.ssh\id_ed25519' -ForegroundColor Green
+    Write-Host '         ▸ PowerShell (注意: 路径用 $env:, 不要用 %VAR%):' -ForegroundColor Gray
+    Write-Host '             type "$env:USERPROFILE\.ssh\id_ed25519.pub"' -ForegroundColor Green
+    Write-Host '             若没有, 生成密钥对 (提示 passphrase 时直接回车两次):' -ForegroundColor Gray
+    Write-Host '             ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_ed25519"' -ForegroundColor Green
+    Write-Host '             (PowerShell 里切勿写 -N "": 空字符串会被丢弃而报 Too many arguments)' -ForegroundColor DarkYellow
     Write-Host '      ② 控制端是 Linux / macOS / WSL:' -ForegroundColor White
     Write-Host '          cat ~/.ssh/id_ed25519.pub' -ForegroundColor Green
     Write-Host '          若没有:  ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519' -ForegroundColor Green
@@ -111,8 +116,11 @@ function Install-PubKeys {
                 Write-Host "      已存在 $genKey.pub, 直接复用." -ForegroundColor Gray
             } else {
                 Write-Host '      生成密钥对 (ed25519, 无口令)...'
-                & ssh-keygen -t ed25519 -N '' -f "$genKey" 2>&1 | Out-Host
-                if ($LASTEXITCODE -ne 0) {
+                # 关键: PowerShell 会把空字符串参数 -N "" / -N '' 直接丢弃, 导致 ssh-keygen 报
+                #   "Too many arguments" (-N 吃掉后面的 -f)。因此【不传 -N】, 改为用管道喂入
+                #   两个空行作为空口令, 跨 PowerShell 版本都稳定, 且不碰空参数 bug.
+                "`r`n`r`n" | & ssh-keygen -t ed25519 -f "$genKey" 2>&1 | Out-Host
+                if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$genKey.pub")) {
                     Write-Host '      [X] ssh-keygen 失败 (可能未装 OpenSSH 客户端). 请按上方指示在控制端手动生成.' -ForegroundColor Red
                     Print-KeyHelp
                     return
@@ -122,7 +130,7 @@ function Install-PubKeys {
             $script:GenKeyPath = $genKey
             Write-Host "      ✅ 已生成私钥: $genKey" -ForegroundColor Green
             Write-Host '      → 请把这个私钥文件复制到你的【控制端电脑】(私钥必须放在连出那台机器上):' -ForegroundColor Yellow
-            Write-Host '          Windows 控制端: 复制到 %USERPROFILE%\.ssh\id_ed25519' -ForegroundColor Green
+            Write-Host '          Windows 控制端: 复制到 用户目录\.ssh\id_ed25519  (CMD: %USERPROFILE%\.ssh\id_ed25519)' -ForegroundColor Green
             Write-Host '          Linux/macOS 控制端: 复制到 ~/.ssh/id_ed25519 并执行 chmod 600' -ForegroundColor Green
             Write-Host '      → 之后即可用该私钥免密连入本机 (连接命令见末尾).' -ForegroundColor Yellow
             Write-Host '      ⚠ 拷贝到控制端后, 建议删掉本机这份私钥 (clean-windows.bat 会自动清除).' -ForegroundColor Gray
@@ -133,11 +141,16 @@ function Install-PubKeys {
         }
     }
     if (-not (Test-Path 'C:\ProgramData\ssh')) { New-Item -ItemType Directory -Path 'C:\ProgramData\ssh' -Force | Out-Null }
-    $pubs | Set-Content -Path $AdminKeys -Encoding ASCII
-    # Windows 对管理员组用户: 公钥必须放 administrators_authorized_keys, 且 ACL 严格, 否则 sshd 拒绝
-    icacls $AdminKeys /inheritance:r /grant 'SYSTEM:F' /grant 'BUILTIN\Administrators:F' | Out-Null
-    Restart-Service sshd -Force
-    Write-Host "      已写入 $($pubs.Count) 个公钥 -> $AdminKeys"
+    try {
+        $pubs | Set-Content -Path $AdminKeys -Encoding ASCII
+        # Windows 对管理员组用户: 公钥必须放 administrators_authorized_keys, 且 ACL 严格, 否则 sshd 拒绝
+        icacls $AdminKeys /inheritance:r /grant 'SYSTEM:F' /grant 'BUILTIN\Administrators:F' | Out-Null
+        Restart-Service sshd -Force
+        Write-Host "      已写入 $($pubs.Count) 个公钥 -> $AdminKeys"
+    } catch {
+        Write-Host "      [!] 写公钥/设权限/重启 sshd 出错: $_" -ForegroundColor Red
+        Write-Host '      公钥文件可能已写入, 但请确认 sshd 服务正在运行 (Get-Service sshd).' -ForegroundColor Yellow
+    }
 }
 
 # ---- 5. 完成 ----
@@ -157,14 +170,26 @@ function Finish {
     Write-Host '  开机自启: Tailscale 服务 + sshd 均 Automatic (无需额外配置).'
     Write-Host '  ⚠ 建议到 login.tailscale.com 把本机 Key expiry 设为 Disable, 否则过期需重跑.'
     Write-Host '  用完清洗: 以管理员运行 clean-windows.bat'
-    Read-Host '回车退出'
 }
 
-Install-Tailscale
-Join-Tailnet
-Enable-SSHServer
-Install-PubKeys
-Finish
+# ---- 主流程: 包一层 try/catch, 保证无论成功/报错窗口都不秒关 ----
+try {
+    Install-Tailscale
+    Join-Tailnet
+    Enable-SSHServer
+    Install-PubKeys
+    Finish
+} catch {
+    Write-Host ''
+    Write-Host '==================== [!] 执行中断 (发生错误) ====================' -ForegroundColor Red
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
+    Write-Host '可重跑本脚本 (已完成的步骤会自动跳过); 或截图以上报错反馈.' -ForegroundColor Yellow
+}
+
+Write-Host ''
+Read-Host '按 Enter 键关闭本窗口'
+
 
 
 

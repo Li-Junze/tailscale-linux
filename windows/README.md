@@ -92,3 +92,17 @@ Tailscale 服务与 `sshd` 在部署时已设为 `Automatic`，重启自动重�
 - **服务器侧设备列表**仍会显示本机，需联网后 `clean-windows.bat` 的 logout 让设备转 offline，
   再到 https://login.tailscale.com/admin/machines 删除节点才算真正消失。
 - 仓库不含真实 authkey / 公钥 / MSI（均 `.gitignore`）。
+
+## 排错 / 常见问题
+
+- **窗口一闪而过 / 自动关闭？** 不会了。v0.5 起脚本**无论成功还是报错都会在末尾暂停**（"按 Enter 键关闭本窗口"），
+  方便你复制 IP / 连接命令或查看报错。如果仍秒关，说明是 `connect-windows.bat` 没被"以管理员身份运行"——
+  务必右键 `.bat` → 以管理员身份运行（直接双击 `.ps1` 也可能因无管理员而退出）。
+
+- **第 4 步"在本机生成密钥"后窗口关了？** 旧版有此 bug（某步报错直接终止进程）。v0.5 已修：生成密钥改用
+  `ssh-keygen` 的**管道喂空行**方式（彻底规避 PowerShell 把 `-N ""` 空参数丢弃导致 `Too many arguments` 的坑），
+  且整段流程包了 `try/catch`，出错也会停在末尾让你看到原因，不会无声关闭。
+
+- **控制端（你自己的电脑）在 PowerShell 里生成密钥报 `Too many arguments`？** 那是 PowerShell 把 `-N ""`
+  的空参数丢掉了。解决：在 PowerShell 里**不要写 `-N`**，直接 `ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_ed25519"`，
+  提示 passphrase 时**回车两次**即可（空口令）。CMD / Linux / macOS 里 `-N ""` 则正常。
