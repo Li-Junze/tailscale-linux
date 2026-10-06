@@ -14,8 +14,10 @@ build_gui.py —— Tailscale-Remote 工具箱（图形界面）
   ★ 日志走信号 + 90ms 批量落地，高频输出也不卡界面
 """
 import os
+import re
 import sys
 import time
+import subprocess
 import threading
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -35,7 +37,7 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QLabel, QLineEdit, QComboBox, QPlainTextEdit, QPushButton,
         QCheckBox, QFrame, QScrollArea, QFileDialog, QMessageBox,
-        QListWidget, QListWidgetItem, QAbstractItemView,
+        QListWidget, QListWidgetItem, QAbstractItemView, QInputDialog,
         QTableWidget, QTableWidgetItem, QHeaderView, QSizePolicy,
     )
     from PyQt5.QtCore import Qt, QUrl, QTimer, pyqtSignal
@@ -46,121 +48,155 @@ except Exception:                                           # noqa: BLE001
 # ============================================================ 主题
 QSS = """
 /* ---------- 基础 ---------- */
-QWidget#page     { background:#F4F6FA; }
-QFrame#card      { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:14px; }
-QFrame#head      { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:14px; }
-QFrame#foot      { background:#FFFFFF; border:1px solid #E2E8F0; border-radius:14px; }
-
-QLabel#title     { font-size:27px; font-weight:bold; color:#0F172A; background:transparent; }
-QLabel#subtitle  { font-size:16px; color:#64748B; background:transparent; }
-QLabel#cardTitle { font-size:21px; font-weight:bold; color:#0F172A; background:transparent; }
-QLabel#cardSub   { font-size:16px; color:#64748B; background:transparent; }
-QLabel#hint      { font-size:16px; color:#64748B; background:transparent; }
-QLabel#ok        { font-size:16px; color:#15803D; background:transparent; }
-QLabel#bad       { font-size:16px; color:#DC2626; background:transparent; }
-QLabel#sum {
-    background:#EFF6FF; border:1px solid #BFDBFE; border-radius:10px;
-    padding:13px 16px; font-size:17px; color:#1E3A8A;
+QWidget#page     { background:#F5F7FC; }
+QFrame#card {
+    background:#FFFFFF; border:1px solid #E4E9F2; border-radius:16px;
+    border-left:4px solid #2563EB;
 }
-QLabel#field     { font-size:18px; color:#0F172A; background:transparent; }
+QFrame#head {
+    background:#FFFFFF; border:1px solid #E4E9F2; border-radius:16px;
+    border-left:6px solid #2563EB;
+}
+QFrame#foot      { background:#FFFFFF; border:1px solid #E4E9F2; border-radius:16px; }
+
+QLabel#title     { font-size:31px; font-weight:bold; color:#0B1220; background:transparent; }
+QLabel#subtitle  { font-size:17px; color:#5B6B84; background:transparent; }
+QLabel#cardTitle { font-size:23px; font-weight:bold; color:#0B1220; background:transparent; }
+QLabel#cardSub   { font-size:17px; color:#5B6B84; background:transparent; }
+QLabel#hint      { font-size:17px; color:#5B6B84; background:transparent; }
+QLabel#ok        { font-size:17px; color:#15803D; background:transparent; font-weight:bold; }
+QLabel#bad       { font-size:17px; color:#DC2626; background:transparent; font-weight:bold; }
+QLabel#sum {
+    background:#EFF6FF; border:1px solid #BFDBFE; border-radius:12px;
+    padding:15px 18px; font-size:18px; color:#1E3A8A;
+}
+QLabel#field     { font-size:19px; color:#0B1220; background:transparent; font-weight:bold; }
+QLabel#pill {
+    background:#ECFDF5; color:#047857; border:1px solid #A7F3D0;
+    border-radius:11px; padding:6px 12px; font-size:16px; font-weight:bold;
+    background:transparent;
+}
 
 /* ---------- 输入控件 ---------- */
 QLineEdit, QPlainTextEdit, QComboBox {
-    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:9px;
-    padding:11px 13px; font-size:18px; color:#0F172A;
+    background:#FFFFFF; border:2px solid #D5DEEB; border-radius:11px;
+    padding:12px 14px; font-size:19px; color:#0B1220;
     selection-background-color:#2563EB; selection-color:#FFFFFF;
 }
+QLineEdit:hover, QPlainTextEdit:hover, QComboBox:hover { border-color:#A9BBDA; }
 QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus { border:2px solid #2563EB; }
-QComboBox::drop-down { border:none; width:30px; }
+QComboBox::drop-down { border:none; width:34px; }
 QComboBox QAbstractItemView {
-    background:#FFFFFF; border:1px solid #CBD5E1; font-size:18px;
-    selection-background-color:#2563EB; selection-color:#FFFFFF; padding:4px;
+    background:#FFFFFF; border:1px solid #CBD5E1; font-size:19px;
+    selection-background-color:#2563EB; selection-color:#FFFFFF; padding:5px;
 }
-QCheckBox { font-size:18px; spacing:11px; background:transparent; padding:5px 0; }
+QCheckBox { font-size:19px; spacing:12px; background:transparent; padding:6px 0; }
 QCheckBox::indicator {
-    width:20px; height:20px; border:2px solid #CBD5E1; border-radius:6px;
+    width:22px; height:22px; border:2px solid #CBD5E1; border-radius:7px;
     background:#FFFFFF;
 }
 QCheckBox::indicator:hover   { border-color:#2563EB; }
 QCheckBox::indicator:checked { background:#2563EB; border-color:#2563EB; }
 QCheckBox::indicator:disabled { background:#F1F5F9; border-color:#E2E8F0; }
 
+/* 连接命令: 等宽 + 强调底色, 让人一眼看出"复制这一行" */
+QLineEdit#conncmd {
+    font-family:Consolas,"Courier New",monospace;
+    font-size:20px; font-weight:bold; color:#065F46;
+    background:#F0FDF4; border:2px solid #6EE7B7; border-radius:11px;
+    padding:13px 15px;
+}
+QLineEdit#conncmd:focus { border:2px solid #10B981; }
+
 /* ---------- 按钮 ---------- */
 QPushButton {
-    background:#F1F5F9; border:1px solid #CBD5E1; border-radius:9px;
-    padding:10px 20px; font-size:17px; color:#0F172A;
+    background:#F1F5F9; border:1px solid #CBD5E1; border-radius:11px;
+    padding:12px 22px; font-size:18px; color:#0B1220;
 }
 QPushButton:hover   { background:#E2E8F0; border-color:#94A3B8; }
 QPushButton:pressed { background:#CBD5E1; }
 QPushButton:disabled{ color:#94A3B8; background:#F8FAFC; border-color:#E2E8F0; }
 QPushButton#primary {
     background:#2563EB; color:#FFFFFF; border:none;
-    font-size:20px; font-weight:bold; padding:14px 36px; border-radius:10px;
+    font-size:23px; font-weight:bold; padding:16px 42px; border-radius:12px;
 }
 QPushButton#primary:hover    { background:#1D4ED8; }
 QPushButton#primary:pressed  { background:#1E40AF; }
 QPushButton#primary:disabled { background:#93B4F7; color:#EFF6FF; }
+QPushButton#primary2 {
+    background:#059669; color:#FFFFFF; border:none;
+    font-size:21px; font-weight:bold; padding:14px 30px; border-radius:12px;
+}
+QPushButton#primary2:hover    { background:#047857; }
+QPushButton#primary2:pressed  { background:#065F46; }
+QPushButton#primary2:disabled { background:#9AD8C2; color:#ECFDF5; }
 QPushButton#ghost {
-    background:#FFFFFF; color:#2563EB; border:1px solid #93B4F7; font-size:17px;
+    background:#FFFFFF; color:#2563EB; border:2px solid #93B4F7; font-size:18px;
 }
 QPushButton#ghost:hover { background:#EFF6FF; }
 QPushButton#danger {
-    background:#FFFFFF; color:#DC2626; border:1px solid #FCA5A5; font-size:17px;
+    background:#FFFFFF; color:#DC2626; border:2px solid #FCA5A5; font-size:18px;
 }
 QPushButton#danger:hover { background:#FEF2F2; }
 
 /* ---------- 侧边栏 ---------- */
-QWidget#sidebar { background:#101828; }
-QWidget#sidebar QLabel { color:#94A3B8; background:transparent; }
-QPushButton#nav {
-    background:transparent; color:#CBD5E1; border:none; border-radius:10px;
-    text-align:left; padding:14px 16px; font-size:19px;
+QWidget#sidebar {
+    background:qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                               stop:0 #0B1220, stop:1 #16233D);
 }
-QPushButton#nav:hover   { background:#1E293B; color:#FFFFFF; }
-QPushButton#nav:checked { background:#2563EB; color:#FFFFFF; font-weight:bold; }
+QWidget#sidebar QLabel { color:#9AA9C2; background:transparent; }
+QPushButton#nav {
+    background:transparent; color:#D3DCEC; border:none; border-radius:12px;
+    text-align:left; padding:16px 18px; font-size:21px;
+}
+QPushButton#nav:hover   { background:#1C2B48; color:#FFFFFF; }
+QPushButton#nav:checked {
+    background:#2563EB; color:#FFFFFF; font-weight:bold;
+    border-left:5px solid #93C5FD;
+}
 QPushButton#nav:checked:hover { background:#1D4ED8; }
-QLabel#brand { color:#FFFFFF; font-size:23px; font-weight:bold; background:transparent; }
-QLabel#brandSub { color:#7C8CA5; font-size:15px; background:transparent; }
+QLabel#brand { color:#FFFFFF; font-size:27px; font-weight:bold; background:transparent; }
+QLabel#brandSub { color:#7C8CA5; font-size:16px; background:transparent; }
 
 /* ---------- 列表 / 表格 ---------- */
 QListWidget {
-    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:10px;
-    font-size:17px; padding:6px;
+    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:12px;
+    font-size:18px; padding:7px;
 }
-QListWidget::item { padding:7px 9px; border-radius:6px; }
+QListWidget::item { padding:8px 10px; border-radius:7px; }
 QListWidget::item:selected { background:#EFF6FF; color:#1E3A8A; }
 QTableWidget {
-    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:10px;
-    font-size:17px; gridline-color:#E2E8F0;
+    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:12px;
+    font-size:19px; gridline-color:#E6EBF3;
 }
 QHeaderView::section {
-    background:#F1F5F9; color:#475569; font-size:16px; font-weight:bold;
-    border:none; border-bottom:1px solid #CBD5E1; padding:9px 11px;
+    background:#EEF2F9; color:#3E4C63; font-size:17px; font-weight:bold;
+    border:none; border-bottom:2px solid #CBD5E1; padding:11px 13px;
 }
-QTableWidget::item { padding:7px 11px; }
-QTableWidget::item:selected { background:#EFF6FF; color:#1E3A8A; }
+QTableWidget::item { padding:9px 13px; }
+QTableWidget::item:selected { background:#DBEAFE; color:#1E3A8A; }
 
 /* ---------- 拖拽区 ---------- */
 QFrame#dropzone {
-    background:#F8FAFC; border:2px dashed #94A3B8; border-radius:12px;
+    background:#F8FAFC; border:3px dashed #94A3B8; border-radius:16px;
 }
 QFrame#dropzone[hot="true"] {
-    background:#EFF6FF; border:2px dashed #2563EB;
+    background:#EFF6FF; border:3px dashed #2563EB;
 }
 
 /* ---------- 控制台 ---------- */
 QPlainTextEdit#console {
-    background:#0F172A; color:#D6E2F5; border:1px solid #1E293B;
-    border-radius:10px; font-family:Consolas,"Courier New",monospace;
-    font-size:15px; padding:13px;
+    background:#0B1220; color:#D6E2F5; border:1px solid #1E293B;
+    border-radius:12px; font-family:Consolas,"Courier New",monospace;
+    font-size:17px; padding:15px;
 }
 
 /* ---------- 滚动 ---------- */
 QScrollArea { border:none; background:transparent; }
-QScrollBar:vertical   { background:#E8EDF5; width:12px; border-radius:6px; margin:0; }
-QScrollBar::handle:vertical   { background:#B9C4D4; border-radius:6px; min-height:44px; }
-QScrollBar:horizontal { background:#E8EDF5; height:12px; border-radius:6px; }
-QScrollBar::handle:horizontal { background:#B9C4D4; border-radius:6px; min-width:44px; }
+QScrollBar:vertical   { background:#E8EDF5; width:14px; border-radius:7px; margin:0; }
+QScrollBar::handle:vertical   { background:#AEBBCD; border-radius:7px; min-height:48px; }
+QScrollBar:horizontal { background:#E8EDF5; height:14px; border-radius:7px; }
+QScrollBar::handle:horizontal { background:#AEBBCD; border-radius:7px; min-width:48px; }
 QScrollBar::add-line, QScrollBar::sub-line { width:0; height:0; }
 """
 
@@ -318,8 +354,8 @@ if HAS_QT:
             self.lbl_ts_state = _lbl("Tailscale：检测中…", "brandSub")
             sv.addWidget(self.lbl_ts_state)
             sv.addStretch(1)
-            tip = _lbl("被控端解压后只跑 deploy\n发文件走 Taildrop，对方零配置",
-                       "brandSub")
+            tip = _lbl("对方零交互\n解压 → 双击 → 完事", "brandSub")
+            tip.setWordWrap(False)
             sv.addWidget(tip)
             hl.addWidget(side)
 
@@ -650,8 +686,31 @@ if HAS_QT:
             self.tbl.itemSelectionChanged.connect(self._on_tbl_select)
             v.addWidget(self.tbl)
 
+            # ---- 连接命令（这一行就是对方该发给你的那一行）----
+            hr = QHBoxLayout()
+            hr.setSpacing(10)
+            hr.addWidget(_lbl("连接命令", "field", False))
+            self.ed_conn = QLineEdit()
+            self.ed_conn.setObjectName("conncmd")
+            self.ed_conn.setPlaceholderText(
+                "选中上面的设备会自动填；也可以把对方发给你的那一行直接粘进来")
+            self.ed_conn.returnPressed.connect(self.on_ssh_connect)
+            hr.addWidget(self.ed_conn, 1)
+            b_cmd = QPushButton("复制")
+            b_cmd.setObjectName("ghost")
+            b_cmd.setToolTip("复制这行连接命令，发给对方让他确认")
+            b_cmd.clicked.connect(self.on_copy_cmd)
+            hr.addWidget(b_cmd)
+            v.addLayout(hr)
+
             h = QHBoxLayout()
-            h.setSpacing(10)
+            h.setSpacing(12)
+            b_ssh = QPushButton("一键 SSH 连接")
+            b_ssh.setObjectName("primary2")
+            b_ssh.setCursor(Qt.PointingHandCursor)
+            b_ssh.setToolTip("弹出一个 PowerShell 窗口直接连到这台机器，可以交互操作")
+            b_ssh.clicked.connect(self.on_ssh_connect)
+            h.addWidget(b_ssh)
             b_cp = QPushButton("复制 IP")
             b_cp.setObjectName("ghost")
             b_cp.clicked.connect(self.on_copy_ip)
@@ -926,6 +985,7 @@ if HAS_QT:
                     break
             else:
                 self.cmb_peer.setEditText(pr["ip"])
+            self._fill_conn_cmd(pr["ip"], pr.get("name") or "")
             self._update_sum()
 
         def _on_tbl_dblclick(self, idx):
@@ -963,6 +1023,157 @@ if HAS_QT:
 
         def on_copy_getcmd(self):
             self._clip("tailscale file get .", "取文件命令")
+
+        # ---------------- SSH 一键连接 ----------------
+        CONN_RE = re.compile(r"(?:^|[\s\"'])([A-Za-z0-9._\\\-]+)@"
+                             r"(\d{1,3}(?:\.\d{1,3}){3})")
+
+        def _known_user(self, ip):
+            """找出对方用户名：① 本工具记住的  ② ~/.ssh/config 里连过的  ③ None"""
+            try:
+                u = (self.cfg.get("ssh_users") or {}).get(ip)
+                if u:
+                    return u
+            except Exception:                                # noqa: BLE001
+                pass
+            try:
+                return (read_ssh_hosts() or {}).get(ip) or None   # noqa: F405
+            except Exception:                                # noqa: BLE001
+                return None
+
+        def _fill_conn_cmd(self, ip=None, name=""):
+            """选中设备后自动把连接命令填进那个绿框（用户名已知才填）。"""
+            if ip is None:
+                pr = self._sel_row_peer() or {}
+                ip = pr.get("ip") or self.current_peer_ip()
+                name = pr.get("name") or name
+            ip = (ip or "").strip()
+            if not ip or ip in self._my_ips:
+                return
+            u = self._known_user(ip)
+            if u:
+                self.ed_conn.setText(f"ssh {u}@{ip}")
+                self.lbl_manage.setText(f"{name or ip}：用户名 {u} 已记住，可直接连")
+            else:
+                self.ed_conn.setPlaceholderText(
+                    "不知道对方用户名 —— 把对方发给你的那一行粘进来即可")
+                self.lbl_manage.setText(f"{name or ip}：还不知道用户名")
+
+        def on_copy_cmd(self):
+            t = (self.ed_conn.text() or "").strip()
+            if not t:
+                QMessageBox.warning(self, "没有命令", "先在表格里选一台设备。")
+                return
+            self._clip(t, "连接命令")
+
+        def on_ssh_connect(self):
+            """一键连：能不问的一律不问，问也只问一次，之后永久记住。
+
+            输入来源优先级：
+              ① 绿框里已有完整命令（自动生成 / 对方发来粘进来的）
+              ② 表格选中 + 已记住的用户名
+              ③ 实在没有，才弹一次框问用户名（问完就写进配置和 ~/.ssh/config）
+            """
+            text = (self.ed_conn.text() or "").strip()
+            ip = user = ""
+            m = self.CONN_RE.search(text)
+            if m:
+                user, ip = m.group(1), m.group(2)
+            else:
+                pr = self._sel_row_peer() or {}
+                ip = (pr.get("ip") or self.current_peer_ip() or "").strip()
+                if ip:
+                    ip = ip.split()[0] if ip.count(".") == 3 else ""
+            if not ip:
+                # 绿框里只有一个裸 IP 的情况
+                tok = (text.split()[-1] if text else "").strip()
+                ip = tok if tok.count(".") == 3 else ""
+            if not ip:
+                QMessageBox.warning(self, "没选中", "先在表格里点一行设备。")
+                return
+            if ip in self._my_ips:
+                QMessageBox.information(self, "这是本机",
+                                        f"{ip} 就是你自己这台电脑，换一台设备吧。")
+                return
+
+            pr = self._sel_row_peer() or {}
+            name = pr.get("name") or ""
+
+            if not user:
+                user = self._known_user(ip) or ""
+
+            if not user:
+                # 唯一一次提问：顺便把历史上输过的用户名都列出来, 少打字
+                hist = sorted({v for v in (self.cfg.get("ssh_users") or {}).values() if v}
+                              | {v for v in (read_ssh_hosts() or {}).values() if v})
+                hint = ""
+                if hist:
+                    hint = "\n\n以前用过的用户名（可直接照抄）：\n  " + "、".join(hist[:8])
+                user, ok = QInputDialog.getText(
+                    self, "对方机器的用户名",
+                    f"目标：{name or ip}    （{ip}）\n\n"
+                    "这台机器上的 Windows 用户名：\n"
+                    "就是对方部署完最后那行 ssh 命令里 @ 前面的那一串。\n"
+                    "★ 一个字都不能差，打错会一直要密码。\n"
+                    "★ 这次输完我就记住了，以后点一下就直接连。" + hint,
+                    QLineEdit.Normal, "")
+                user = (user or "").strip()
+                if not ok or not user:
+                    return
+
+            # 记住 + 写别名
+            users = dict(self.cfg.get("ssh_users") or {})
+            if users.get(ip) != user:
+                users[ip] = user
+                self.cfg["ssh_users"] = users
+                save_config(self.cfg)                        # noqa: F405
+            alias = sanitize_alias(name) or ("ts-" + ip.replace(".", "-"))  # noqa: F405
+            ok2, msg = upsert_ssh_alias(alias, ip, user)     # noqa: F405
+            self.ed_conn.setText(f"ssh {user}@{ip}")
+            self.lbl_manage.setText(f"别名 {alias} 已写入" if ok2
+                                    else f"{msg}（本次仍可直连）")
+            self._log_now("send", f"[ssh] 连接 {user}@{ip}")
+            if ok2:
+                self._log_now("send", f"[ssh] 已登记别名 → 以后命令行直接 ssh {alias}")
+            self._open_ssh_window(user, ip, alias if ok2 else "")
+
+        def _open_ssh_window(self, user, ip, alias=""):
+            """弹出一个真正的 PowerShell 窗口跑 ssh —— 可以一直交互操作。
+
+            直接 Popen powershell.exe -NoExit, 不落临时 bat: 少一次文件 IO,
+            也不会有 cmd 闪一下变成 powershell 的"两��窗口"观感。
+            """
+            target = alias or f"{user}@{ip}"
+            ps = os.path.join(os.environ.get("WINDIR", r"C:\Windows"),
+                              "System32", "WindowsPowerShell", "v1.0",
+                              "powershell.exe")
+            if not os.path.isfile(ps):
+                ps = "powershell.exe"
+            banner = (f"Write-Host '正在连接 {user}@{ip} ...' -ForegroundColor Cyan; "
+                      f"Write-Host '已连接！现在可以直接敲命令了。exit 断开。' "
+                      f"-ForegroundColor Green; ")
+            inner = (banner +
+                     f"ssh -o StrictHostKeyChecking=accept-new "
+                     f"-o ServerAliveInterval=30 -o ServerAliveCountMax 6 {target}; "
+                     f"Write-Host ''; Write-Host '[连接已断开]' -ForegroundColor Yellow")
+            try:
+                _hide_console()                              # noqa: F405
+                # ★ 必须 CREATE_NEW_CONSOLE: 用 DETACHED_PROCESS 的话 powershell 根本
+                #   没有控制台窗口（连 stdout 都没有），ssh 就不能交互。
+                #   也绝不能重定向 stdin/stdout/stderr —— 重定向 = 窗口里什么都看不见。
+                subprocess.Popen(                            # noqa: S603
+                    [ps, "-NoExit", "-NoProfile", "-Command",
+                     f"$Host.UI.RawUI.WindowTitle='SSH {user}@{ip}'; {inner}"],
+                    creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0x00000010),
+                    cwd=os.path.expanduser("~"),
+                    close_fds=True,
+                )
+                self.lbl_status.setText(f"已打开 PowerShell 窗口：{user}@{ip}")
+            except Exception:                                # noqa: BLE001
+                dbg_exc("open powershell window")            # noqa: F405
+                QMessageBox.warning(
+                    self, "没能自动打开终端",
+                    "请手动打开 PowerShell，粘贴执行：\n\n    ssh " + target)
 
         def on_delete_peer(self):
             pr = self._sel_row_peer() or {"ip": self.current_peer_ip(), "name": ""}
@@ -1484,7 +1695,7 @@ def main():
         #   用 pt 会让没在 QSS 里指定字号的控件(消息框/表格项)字号翻倍,
         #   与 QSS 里的 px 字号打架 -> 文字被撑爆/裁切。px 统一最稳。
         _f = QFont(FONT)
-        _f.setPixelSize(17)
+        _f.setPixelSize(19)      # 基准字号（px；本机 DPI 192，不能用 pt）
         app.setFont(_f)
         app.setStyle("Fusion")
         w = MainWindow()

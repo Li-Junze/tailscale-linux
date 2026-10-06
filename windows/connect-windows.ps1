@@ -26,7 +26,8 @@ if ($hit) { $MSI = $hit.FullName }
 $KeysDir  = Join-Path $ScriptDir 'keys'
 $AdminKeys= 'C:\ProgramData\ssh\administrators_authorized_keys'
 $script:GenKeyPath = $null   # 若本脚本代生成密钥对, 记录私钥路径, Finish 时打印 -i 连接命令
-$SCRIPT_ID = 'v0.7-win-20261006'
+$script:ConnCmd    = ''      # 最终连接命令, 脚本【最后一行】会重复一次方便直接抄
+$SCRIPT_ID = 'v0.8-win-20261006'
 
 function Banner($m){ Write-Host ''; Write-Host "==== $m ====" -ForegroundColor Cyan }
 
@@ -43,7 +44,7 @@ if (-not $IsAdmin -and -not $DryRun) {
         Start-Process powershell -Verb RunAs -ArgumentList $argList
     } catch {
         Write-Host '[X] 提权被拒绝或失败。请右键 程序\windows\connect-windows.bat -> 以管理员身份运行。' -ForegroundColor Red
-        Read-Host '按 Enter 退出'
+        Start-Sleep -Seconds 8      # 不按 Enter: 全程零交互(窗口自己留 8 秒给人看清)
     }
     exit 0
 }
@@ -112,15 +113,14 @@ function Join-Tailnet {
         $m = Select-String -Path $localKey -Pattern 'TS_AUTHKEY=([^\s]+)' | Select-Object -First 1
         if ($m) { $key = $m.Matches.Groups[1].Value }
     }
+    # ★ 零交互: 包里没烘焙 authkey 也【不提问】。宁可后面 INDICATE 提示, 也不卡住对方。
     if (-not $key) {
-        $key = Read-Host '粘贴 Tailscale authkey (留空跳过, 之后手动 tailscale up)'
+        Write-Host '      [i] 包内未自带 authkey，跳过自动入网（不打扰你）。' -ForegroundColor Yellow
+        Write-Host "      请让对方把 authkey 发来，或直接双击桌面的『重新入网』。" -ForegroundColor Yellow
+        Write-Host "      手动也可以在助手指导下敲: tailscale up --authkey=你的KEY" -ForegroundColor Gray
+        return
     }
-    if ($key) {
-        & $TSExe up --authkey=$key --accept-dns=true 2>&1 | Out-Host
-    } else {
-        Write-Host '      [!] 未提供 key, 请稍后手动: ' -ForegroundColor Yellow
-        Write-Host "      & '$TSExe' up" -ForegroundColor Yellow
-    }
+    & $TSExe up --authkey=$key --accept-dns=true 2>&1 | Out-Host
 }
 
 # ---- 3. 启用 OpenSSH Server ----
@@ -133,9 +133,10 @@ function Enable-SSHServer {
             if ($cap) { $state = $cap.State }
         } catch { }
         Write-Host "[3/5] [DryRun] OpenSSH Server: $state"
+        Write-Host '      [DryRun] 开机自启: sshd / ssh-agent / tailscale 均设 Automatic, 并建 Tailscale-AutoUp 开机任务'
         return
     }
-    Write-Host '[3/5] 配置 Windows OpenSSH Server (公钥免密)...'
+    Write-Host '[3/5] 配置 Windows OpenSSH Server + 开机自启 (公钥免密)...'
     $cap = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' }
     if ($cap.State -ne 'Installed') {
         Write-Host '      安装 OpenSSH Server 功能 (系统自带 payload, 通常离线可用)...'
@@ -147,82 +148,87 @@ function Enable-SSHServer {
     Start-Service sshd
     try { Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent } catch {}
     Write-Host '      sshd 已启动并设为开机自启.'
+
+    # ---- 开机自启总保障: 服务 Automatic + 开机自动 tailscale up ----
+    # 目标: 对方重启电脑后什么都不用点, Tailscale 自动入网、sshd 自动监听。
+    Write-Host '      [自启] 固化开机自启动 ...'
+    foreach ($svc in @('sshd', 'ssh-agent', 'tailscale')) {
+        if (Get-Service $svc -ErrorAction SilentlyContinue) {
+            try {
+                Set-Service $svc -StartupType Automatic
+                Start-Service $svc -ErrorAction SilentlyContinue
+                Write-Host "      [OK] 服务 $svc → Automatic (开机即运行)"
+            } catch {
+                Write-Host "      [!] $svc 自启设置失败: $_" -ForegroundColor DarkYellow
+            }
+        }
+    }
+    try {
+        # 开机延迟 30s 自动 tailscale up —— 幂等, 用来把网络就绪后把连接拉起来
+        schtasks /Create /TN 'Tailscale-AutoUp' /TR "`"$TSExe`" up" /SC ONSTART /DELAY 0000:30 /RL HIGHEST /F 2>&1 | Out-Null
+        Write-Host '      [OK] 开机任务 Tailscale-AutoUp 已建 (重启后自动入网)'
+    } catch {
+        Write-Host "      [!] 建开机任务失败(不影响本次使用): $_" -ForegroundColor DarkYellow
+    }
 }
 
-# ---- 4. 部署控制端公钥 (免密) ----
-function Print-KeyHelp {
-    Write-Host '      ── 如何在【控制端电脑】上拿到你的公钥 (复制输出整行) ──' -ForegroundColor DarkCyan
-    Write-Host '      ① 控制端是 Windows:' -ForegroundColor White
-    Write-Host '         - CMD (命令提示符):' -ForegroundColor Gray
-    Write-Host '             type %USERPROFILE%\.ssh\id_ed25519.pub' -ForegroundColor Green
-    Write-Host '             若提示找不到文件, 先生成:  ssh-keygen -t ed25519 -N "" -f %USERPROFILE%\.ssh\id_ed25519' -ForegroundColor Green
-    Write-Host '         - PowerShell (注意: 路径用 $env:, 不要用 %VAR%):' -ForegroundColor Gray
-    Write-Host '             type "$env:USERPROFILE\.ssh\id_ed25519.pub"' -ForegroundColor Green
-    Write-Host '             若没有, 生成密钥对 (提示 passphrase 时直接回车两次):' -ForegroundColor Gray
-    Write-Host '             ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_ed25519"' -ForegroundColor Green
-    Write-Host '             (PowerShell 里切勿写 -N "": 空字符串会被丢弃而报 Too many arguments)' -ForegroundColor DarkYellow
-    Write-Host '      ② 控制端是 Linux / macOS / WSL:' -ForegroundColor White
-    Write-Host '          cat ~/.ssh/id_ed25519.pub' -ForegroundColor Green
-    Write-Host '          若没有:  ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519' -ForegroundColor Green
-    Write-Host '      ③ 已有 keys/ 目录里的 *.pub 文件则无需粘贴, 脚本自动读取.' -ForegroundColor Gray
-        Write-Host '      (复制 ssh-ed25519 AAAA... 开头的那整行, 回到下面粘贴)' -ForegroundColor DarkCyan
-        Write-Host '      ※ 若控制端完全没密钥, 本脚本第4步可帮你在本机直接生成一对 (选 y 即可).' -ForegroundColor Magenta
-}
-
+# ---- 4. 部署控制端公钥 (免密, 全程不提问) ----
+# ★ 硬性要求: 对方必须是 0 交互。所以这里【没有任何 Read-Host】。
+#   包里 keys/ 已烘焙好控制端公钥(打包时自动生成), 落盘即可; 万一缺失,
+#   就静默在本机再生成一对并把公钥装上 —— 宁可多一步自动操作, 也不问对方。
 function Install-PubKeys {
     if ($DryRun) {
         $pf = @(Get-ChildItem $KeysDir -ErrorAction SilentlyContinue |
                 Where-Object { $_.Name -match '\.pub(\.local)?$' })
-        Write-Host "[4/5] [DryRun] keys/ 下可用公钥文件: $($pf.Count) 个"
+        $n = $pf.Count
+        Write-Host "[4/5] [DryRun] keys/ 下可用公钥文件: $n 个"
+        Write-Host '      [DryRun] 真实运行全程无提问, 公钥静默写入 administrators_authorized_keys'
         return
     }
-    Write-Host '[4/5] 部署控制端公钥 (免密登录)...'
-    Print-KeyHelp
+    Write-Host '[4/5] 部署控制端公钥 (免密登录, 全程自动)...'
     $pubs = @()
-    Get-ChildItem $KeysDir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.pub(\.local)?$' } | ForEach-Object { (Get-Content $_.FullName) | ForEach-Object { if ($_.Trim()) { $pubs += $_.Trim() } } }
-    $extra = Read-Host '粘贴控制端公钥 (直接粘一行 ssh-ed25519 ..., 或回车用 keys/ 内文件/自动生成)'
-    if ($extra.Trim()) { $pubs += $extra.Trim() }
+    Get-ChildItem $KeysDir -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '\.pub(\.local)?$' } |
+        ForEach-Object {
+            (Get-Content $_.FullName) | ForEach-Object {
+                $t = $_.Trim()
+                if ($t) { $pubs += $t }
+            }
+        }
 
     if ($pubs.Count -eq 0) {
-        Write-Host '      [!] 未检测到任何公钥, 控制端将无法免密登录.' -ForegroundColor Red
-        $gen = Read-Host '      是否在本机生成一对新密钥供控制端使用? (y/N, 默认 N)'
-        if ($gen -match '^[Yy]') {
-            $genKey = Join-Path $KeysDir 'id_ed25519'
-            if (Test-Path "$genKey.pub") {
-                Write-Host "      已存在 $genKey.pub, 直接复用." -ForegroundColor Gray
-            } else {
-                Write-Host '      生成密钥对 (ed25519, 无口令)...'
-                # 关键: PowerShell 会把空字符串参数 -N "" / -N '' 直接丢弃, 导致 ssh-keygen 报
-                #   "Too many arguments" (-N 吃掉后面的 -f)。因此【不传 -N】, 改为用管道喂入
-                #   两个空行作为空口令, 跨 PowerShell 版本都稳定, 且不碰空参数 bug.
-                "`r`n`r`n" | & ssh-keygen -t ed25519 -f "$genKey" 2>&1 | Out-Host
-                if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$genKey.pub")) {
-                    Write-Host '      [X] ssh-keygen 失败 (可能未装 OpenSSH 客户端). 请按上方指示在控制端手动生成.' -ForegroundColor Red
-                    Print-KeyHelp
-                    return
-                }
-            }
+        # 极端情况(包里竟然没公钥): 静默生成一对, 不打扰对方
+        Write-Host '      [i] 包内未带公钥 —— 自动在本机补生成一对 (ed25519, 无口令)...'
+        $genKey = Join-Path $KeysDir 'id_ed25519'
+        # 不传 -N: PowerShell 会把空字符串参数丢掉导致 ssh-keygen 报 Too many arguments,
+        #          改用管道喂两个空行作为空口令, 跨版本稳定。
+        "`r`n`r`n" | & ssh-keygen -t ed25519 -f "$genKey" 2>&1 | Out-Host
+        if (Test-Path "$genKey.pub") {
             $pubs += (Get-Content "$genKey.pub").Trim()
             $script:GenKeyPath = $genKey
-            Write-Host "      [OK] 已生成私钥: $genKey" -ForegroundColor Green
-            Write-Host '      → 请把这个私钥文件复制到你的【控制端电脑】(私钥必须放在连出那台机器上):' -ForegroundColor Yellow
-            Write-Host '          Windows 控制端: 复制到 用户目录\.ssh\id_ed25519  (CMD: %USERPROFILE%\.ssh\id_ed25519)' -ForegroundColor Green
-            Write-Host '          Linux/macOS 控制端: 复制到 ~/.ssh/id_ed25519 并执行 chmod 600' -ForegroundColor Green
-            Write-Host '      → 之后即可用该私钥免密连入本机 (连接命令见末尾).' -ForegroundColor Yellow
-            Write-Host '      [!] 拷贝到控制端后, 建议删掉本机这份私钥 (clean-windows.bat 会自动清除).' -ForegroundColor Gray
+            Write-Host "      [OK] 已补生成: $genKey" -ForegroundColor Green
         } else {
-            Write-Host '      请按上方指示, 在控制端电脑生成公钥, 把那整行粘回来.' -ForegroundColor Yellow
-            Print-KeyHelp
+            Write-Host '      [!] 本机也没有 ssh-keygen, 无法免密。对方仍可用密码登录。' -ForegroundColor Red
             return
         }
+    } else {
+        Write-Host "      [OK] 读到 $($pubs.Count) 个公钥, 静默写入, 无需你输入任何东西。"
     }
-    if (-not (Test-Path 'C:\ProgramData\ssh')) { New-Item -ItemType Directory -Path 'C:\ProgramData\ssh' -Force | Out-Null }
+
+    if (-not (Test-Path 'C:\ProgramData\ssh')) {
+        New-Item -ItemType Directory -Path 'C:\ProgramData\ssh' -Force | Out-Null
+    }
     try {
         $pubs | Set-Content -Path $AdminKeys -Encoding ASCII
         # Windows 对管理员组用户: 公钥必须放 administrators_authorized_keys, 且 ACL 严格, 否则 sshd 拒绝
         icacls $AdminKeys /inheritance:r /grant 'SYSTEM:F' /grant 'BUILTIN\Administrators:F' | Out-Null
+        # 顺手写一份到自己用户目录(非管理员组账号也能用)
+        $userSsh = Join-Path $env:USERPROFILE '.ssh'
+        if (-not (Test-Path $userSsh)) { New-Item -ItemType Directory -Path $userSsh -Force | Out-Null }
+        $pubs | Set-Content -Path (Join-Path $userSsh 'authorized_keys') -Encoding ASCII
         Restart-Service sshd -Force
-        Write-Host "      已写入 $($pubs.Count) 个公钥 -> $AdminKeys"
+        Write-Host "      [OK] 已写入 $($pubs.Count) 个公钥 -> $AdminKeys"
+        Write-Host '      [OK] sshd 已重载, 控制端可以免密连入。'
     } catch {
         Write-Host "      [!] 写公钥/设权限/重启 sshd 出错: $_" -ForegroundColor Red
         Write-Host '      公钥文件可能已写入, 但请确认 sshd 服务正在运行 (Get-Service sshd).' -ForegroundColor Yellow
@@ -235,14 +241,63 @@ function Finish {
     if ($DryRun) { $ip = '100.x.x.x' } else { $ip = (& $TSExe ip -4 2>$null) -join ',' }
     if ($DryRun) { Banner '[DryRun] 流程预演结束 —— 真正部署后这里会显示:' }
     else { Banner '本机(被控端)已就绪' }
-    Write-Host "  Tailscale IP : $ip"
+    $u = $env:USERNAME
+    Write-Host ''
+    Write-Host '  ============ 控制端要用的三样东西 ============' -ForegroundColor Cyan
+    Write-Host '    (1) Tailscale IP : ' -NoNewline -ForegroundColor Gray
+    Write-Host "$ip" -ForegroundColor White
+    Write-Host '    (2) 本机用户名   : ' -NoNewline -ForegroundColor Gray
+    Write-Host "$u" -ForegroundColor Yellow
+    Write-Host '    (3) 连接命令     : ' -NoNewline -ForegroundColor Gray
     if ($script:GenKeyPath) {
-        Write-Host "  连接命令    : ssh -i `"$script:GenKeyPath`" $env:USERNAME@$ip"
-        Write-Host '                (用本脚本生成的私钥; 已拷到控制端则把路径换成控制端那份)'
+        Write-Host "ssh -i `"$script:GenKeyPath`" $u@$ip" -ForegroundColor Green
     } else {
-        Write-Host "  连接命令    : ssh $env:USERNAME@$ip"
+        Write-Host "ssh $u@$ip" -ForegroundColor Green
+    }
+    Write-Host '  ============================================' -ForegroundColor Cyan
+    Write-Host ''
+    # 记住连接命令, 脚本最后一行会再重复一次(方便直接抄最后一行)
+    if ($script:GenKeyPath) {
+        $script:ConnCmd = "ssh -i `"$script:GenKeyPath`" $u@$ip"
+    } else {
+        $script:ConnCmd = "ssh $u@$ip"
+    }
+    Write-Host '  ** (2) 这个用户名必须一字不差地抄到控制端 **' -ForegroundColor Yellow
+    Write-Host '     少打或多打一个字母 => 这台机器上没这个账号 => 公钥压根不参与验证' -ForegroundColor Yellow
+    Write-Host '     => 控制端只会被反复要密码 => Permission denied (公钥其实已装好)。' -ForegroundColor Yellow
+    Write-Host '     [真实案例] lllxx 被抄成 lllxxx, 排查了两轮才发现是多了个字母。' -ForegroundColor DarkYellow
+    if ($script:GenKeyPath) {
+        Write-Host '  (连接命令里的私钥是本脚本代为生成的; 已拷到控制端就换成控制端那份路径)' -ForegroundColor Gray
     }
     Write-Host '  (控制端需已装 Tailscale 客户端并在同一 tailnet)'
+    Write-Host ''
+    # ---- 把上面三样写进包根目录, 便于直接复制粘贴, 免得手抄出错 ----
+    if ($DryRun) {
+        Write-Host '  [DryRun] 真正部署时会写出: 包根目录\连接信息.txt' -ForegroundColor Gray
+    } else {
+        $root = Split-Path -Parent (Split-Path -Parent $ScriptDir)
+        try {
+            $rows = @(
+                '============ 控制端连接信息 ============',
+                '',
+                "Tailscale IP : $ip",
+                "本机用户名   : $u",
+                '',
+                '★ 用户名必须一字不差。打错一个字母 => 反复要密码 + Permission denied,',
+                '  而被控端其实早就装好了, 极易误判成"包坏了"。',
+                '★ 控制端是 Windows: 打开 PowerShell, 直接粘贴下面那一行。',
+                '★ 控制端是 Linux/macOS: 确保控制端私钥已生成, 其 .pub 已放进本机 keys/。',
+                '',
+                '=========== 复制下面这一行给控制端 ===========',
+                "ssh $u@$ip",
+                '============================================='
+            ) -join "`r`n"
+            Set-Content -Path (Join-Path $root '连接信息.txt') -Value $rows -Encoding UTF8
+            Write-Host '  已写出 包根目录\连接信息.txt  (可直接抄给控制端)' -ForegroundColor Gray
+        } catch {
+            Write-Host "  [!] 写 连接信息.txt 失败, 不影响使用: $_" -ForegroundColor DarkYellow
+        }
+    }
     Write-Host ''
     Write-Host '  开机自启: Tailscale 服务 + sshd 均 Automatic (无需额外配置)。'
     Write-Host '  [!] 建议到 login.tailscale.com 把本机 Key expiry 设为 Disable, 否则过期需重跑.'
@@ -254,9 +309,9 @@ function Finish {
     Write-Host '  ── 想把文件发到这台机器? ──'
     Write-Host '     在你自己的(控制端)电脑上执行, 把下面的 IP 换成本机的:'
     Write-Host ''
-    Write-Host "       scp -r 文件或目录 $env:USERNAME@$($ip):./"
+    Write-Host "       scp -r 文件或目录 $u@$($ip):./"
     Write-Host ''
-    Write-Host "     文件会落在本机 C:\Users\$env:USERNAME\ 下。"
+    Write-Host "     文件会落在本机 C:\Users\$u\ 下。"
     Write-Host '     (控制端若提示输密码, 本方案用的是公钥免密, 直接回车即可)'
 }
 
@@ -282,6 +337,18 @@ if ($DryRun) {
     Write-Host '  真正部署请双击: 程序\windows\connect-windows.bat  (会自动弹 UAC)' -ForegroundColor Cyan
 }
 
+# ==================== 最后一行: 连接命令 ====================
+# 需求: 让对方能把【最后一行】直接复制过来, 不用在一堆输出里找。
+if (-not $script:ConnCmd) { $script:ConnCmd = "ssh $env:USERNAME@100.x.x.x" }
+Write-Host ''
+Write-Host ''
+Write-Host '==============================================================' -ForegroundColor Green
+Write-Host '  请把【下面这一行】复制发给对方（就是最后这行）:' -ForegroundColor White
+Write-Host ''
+Write-Host ("    " + $script:ConnCmd) -ForegroundColor Green
+Write-Host ''
+Write-Host '  对方在自己电脑上粘贴执行即可免密连入本机，不需要输密码。' -ForegroundColor Yellow
+Write-Host '==============================================================' -ForegroundColor Green
 Write-Host ''
 Read-Host '按 Enter 键关闭本窗口'
 

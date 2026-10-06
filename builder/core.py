@@ -23,6 +23,7 @@ build_gui.py —— Tailscale-Remote 配置生成器
 运行: python build_gui.py
 """
 import os
+import re
 import sys
 import json
 import shutil
@@ -265,6 +266,7 @@ DEFAULT_CONFIG = {
     "pubkey": "",
     "remember_auth": False,   # authkey 默认【不】记住, 避免明文长期落盘
     "send_history": [],        # 发送文件的目标 IP 历史
+    "ssh_users": {},           # {IP: 被控端 Windows 用户名}, 记住后一键连接不再手打
 }
 
 
@@ -300,6 +302,159 @@ def save_config(cfg, path=None, log=None):
     except Exception as e:  # noqa: BLE001
         if log:
             log(f"  [!] 保存配置失败: {e}")
+
+
+# ------------------------------------------------------------ SSH 免密快捷
+# 被控端部署好后, 控制端只需记住「IP + 对方用户名」即可免密连入。
+# 最容易翻车的一步就是手打用户名打错一个字母（实测踩过: lllxx 打成 lllxxx,
+# 服务器上没这个账号 -> 公钥压根不参与验证 -> 反复要密码 -> Permission denied）。
+# 所以这里把用户名固化进 ~/.ssh/config, 之后 ssh <别名> 就行, 永不手打。
+SSH_DIR    = os.path.join(os.path.expanduser("~"), ".ssh")
+SSH_CONFIG = os.path.join(SSH_DIR, "config")
+
+
+def ssh_default_key():
+    """控制端私钥路径: 依次找 id_ed25519 / id_rsa / id_ecdsa, 都没有则返回空串。"""
+    for n in ("id_ed25519", "id_rsa", "id_ecdsa"):
+        p = os.path.join(SSH_DIR, n)
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
+def sanitize_alias(name):
+    """把 Tailscale 设备名变成合法 ssh 别名（只保留字母数字与 . _ -）。"""
+    s = re.sub(r"[^A-Za-z0-9_.\-]", "-", (name or "").strip())
+    return s.strip("-.")
+
+
+def _ssh_alias_block(alias, host, user, key):
+    out = [f"Host {alias}",
+           f"    HostName {host}",
+           f"    User {user}"]
+    if key:
+        out.append("    IdentityFile " + key.replace("\\", "/"))
+    out += ["    IdentitiesOnly yes",
+            "    StrictHostKeyChecking accept-new",
+            "    ServerAliveInterval 30",
+            "    ServerAliveCountMax 6"]
+    return out
+
+
+def upsert_ssh_alias(alias, host, user, key=None, log=None):
+    """在 ~/.ssh/config 里新增或就地更新一个 Host 块。
+
+    只动别名完全相同的那个块, 其余内容逐行原样保留 —— 不会破坏你已有的
+    github 等配置。返回 (ok, msg)。
+    """
+    alias = (alias or "").strip()
+    host = (host or "").strip()
+    user = (user or "").strip()
+    if not alias or not host or not user:
+        return False, "别名 / IP / 用户名 缺一不可"
+    key = key or ssh_default_key()
+    try:
+        os.makedirs(SSH_DIR, exist_ok=True)
+        old = ""
+        if os.path.isfile(SSH_CONFIG):
+            with open(SSH_CONFIG, "r", encoding="utf-8", errors="replace") as f:
+                old = f.read()
+        lines = old.replace("\r\n", "\n").split("\n")
+
+        start = end = -1
+        for i, ln in enumerate(lines):
+            s = ln.strip()
+            if not s or s[:1].isspace():
+                continue
+            toks = s.split()
+            if toks and toks[0].lower() == "host" and len(toks) > 1 and toks[1] == alias:
+                start = i
+                j = i + 1
+                while j < len(lines):
+                    t = lines[j]
+                    if t.strip() and not t[:1].isspace():
+                        break
+                    j += 1
+                end = j
+                break
+
+        block = _ssh_alias_block(alias, host, user, key)
+        if start >= 0:
+            lines[start:end] = block
+            action = "已更新"
+        else:
+            while lines and not lines[-1].strip():
+                lines.pop()
+            if lines:
+                lines.append("")
+            lines += block
+            action = "已新增"
+        with open(SSH_CONFIG, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(lines).rstrip("\n") + "\n")
+        msg = f"{action}别名【{alias}】-> {user}@{host}"
+        if log:
+            log("  " + msg)
+        return True, msg
+    except Exception as e:  # noqa: BLE001
+        if log:
+            log(f"  [!] 写 ssh 配置失败: {e}")
+        return False, f"写入 ssh 配置失败: {e}"
+
+
+def read_ssh_aliases():
+    """读回 ~/.ssh/config 里已有的 Host 别名（界面展示用）。"""
+    out = []
+    try:
+        with open(SSH_CONFIG, "r", encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                s = ln.strip()
+                if not s or s[:1].isspace():
+                    continue
+                t = s.split()
+                if t and t[0].lower() == "host" and len(t) > 1 \
+                        and t[1] not in out and "*" not in t[1]:
+                    out.append(t[1])
+    except OSError:
+        pass
+    return out
+
+
+def read_ssh_hosts():
+    """读回 ~/.ssh/config 里的 {HostName/IP: User} 映射。
+
+    用途: 界面选中一台设备时, 若本地配置里已经连过这个 IP, 就能把对方用户名
+    自动填出来 —— 省掉那个"错一个字母就全废"的手打环节。
+    """
+    out = {}
+    try:
+        with open(SSH_CONFIG, "r", encoding="utf-8", errors="replace") as f:
+            host = user = None
+            for raw in f:
+                s = raw.strip()
+                if not s or s.startswith("#"):
+                    continue
+                # ★ 缩进必须拿【原始行】判断: 先 strip 再判会让每一行都变成"新块开头"
+                if raw[:1] not in (" ", "\t"):             # 新的 Host 块开始
+                    if host and user:
+                        out.setdefault(host, user)
+                    host = user = None
+                    t = s.split()
+                    if t and t[0].lower() != "host":
+                        host = user = None
+                    continue
+                t = s.split(None, 1)
+                if len(t) < 2:
+                    continue
+                k, v = t[0].lower(), t[1].strip()
+                if k == "hostname":
+                    host = v
+                elif k == "user":
+                    user = v
+            if host and user:
+                out.setdefault(host, user)
+    except OSError:
+        pass
+    return out
 
 
 def build_summary(linux_on, win_on, offline, want_7zip, arch, fmt_index,
@@ -524,31 +679,43 @@ def verify_package(pkg_dir, log=print):
         log("  [OK] 编码自检通过: bat=GBK/CRLF, ps1=UTF-8-BOM, sh=UTF-8/LF")
     return problems
 
-QUICK_TXT = """【怎么用 —— 就三步】
+QUICK_TXT = """【怎么用 —— 只需要点一下】
 ================================================================
 
-  第1步  看这个文件: README.md       (想了解更多就看, 不看也能用)
-  第2步  部署:  Linux   ->  bash deploy.sh
-                 Windows -> 右键 deploy.bat  选"以管理员身份运行"
-  第3步  用完:  Linux   ->  bash clean.sh
-                 Windows -> 右键 clean.bat   选"以管理员身份运行"
+  第1步  双击 deploy.bat  (Windows) / bash deploy.sh  (Linux)
+         弹出的窗口里点【是】同意提权 —— 就这一下, 全程不需要输入任何东西。
+         密钥和入网凭证都已在包里备好, 脚本自己装、自己配、自己启动。
 
-  deploy 跑完后屏幕会打印 Tailscale IP(形如 100.x.x.x),
-  回到你自己电脑用它连进来即可。
+  第2步  等它跑完。窗口最后会单独框出一行:
+             ==============================================================
+               请把【下面这一行】复制发给对方（就是最后这行）:
+
+                 ssh 你的用户名@100.x.x.x
+             ==============================================================
+         把这一行发给要连你电脑的人, 他粘贴执行就能连进来, 不用输密码。
+
+  第3步  用完清洗: 右键 clean.bat → 以管理员身份运行
+                   (Linux: bash clean.sh)
+
+----------------------------------------------------------------
+【开机自启 —— 不用你管】
+  Tailscale 服务、sshd 服务都已被设为"开机自动启动", 并建了开机任务
+  自动入网。也就是说这台电脑重启之后什么都不用点, 依然能被连上。
 
 ----------------------------------------------------------------
 【只有这几个文件要碰】
-  deploy.sh / deploy.bat    部署 (只跑一次)
-  clean.sh  / clean.bat     清洗 (用完跑)
+  deploy.bat / deploy.sh    部署 (只跑一次)
+  clean.bat  / clean.sh     清洗 (用完跑)
+  连接信息.txt              部署后自动生成, 里面就是那行连接命令
   README.md                 说明文档
   使用说明.txt              就是本文件
 
   『程序』文件夹是实现细节, 不需要打开, 也不用动。
 ----------------------------------------------------------------
 【安全提醒】
-  本包内含明文 Tailscale authkey, 只发给你信任的人。
-  对方跑完 clean.sh / clean.bat 后本机痕迹会被清除;
-  但你的 Tailscale 后台设备列表里仍会留着这台机器,
+  本包内含明文 Tailscale authkey 与控制端公钥, 只发给你信任的人。
+  对方跑完 clean 后本机痕迹会被清除;
+  你的 Tailscale 后台设备列表里仍会留着这台机器,
   要彻底移除请到 https://login.tailscale.com/admin/machines 删除该节点。
 """
 
@@ -658,10 +825,19 @@ def assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
             with open(os.path.join(keys_dir, "authkey.local.txt"), "w", encoding="utf-8") as f:
                 f.write("TS_AUTHKEY=" + auth + "\n")
             log(f"  [OK] 烘焙 authkey → 程序/{plat}/keys/authkey.local.txt")
-        if plat == "windows" and pub:
-            with open(os.path.join(keys_dir, "control.pub"), "w", encoding="utf-8") as f:
-                f.write(pub + "\n")
-            log("  [OK] 烘焙控制端公钥 → 程序/windows/keys/control.pub")
+        if plat == "windows":
+            if not pub:
+                # ★ 零交互的前提: 对方机器上绝对不能出现"请粘贴公钥"这样的提问。
+                #   控制端没密钥就现场生成一对(本机私钥留下, 公钥烘焙进包)。
+                log("  · 未填控制端公钥 —— 自动生成一对 ed25519（对方将全程无需输入）")
+                _priv, _pubp, pub = generate_ssh_keypair(log=log)
+            if pub:
+                with open(os.path.join(keys_dir, "control.pub"), "w", encoding="utf-8") as f:
+                    f.write(pub + "\n")
+                log("  [OK] 烘焙控制端公钥 → 程序/windows/keys/control.pub")
+                log("      （本机 ~/.ssh/id_ed25519 是配对私钥，连对方时自动用它，无需密码）")
+            else:
+                log("  [!] 拿不到控制端公钥，对方将无法免密登录（仍需交互式粘贴）")
 
         # ---- 提示二进制是否齐全 ----
         if plat == "linux":
@@ -680,19 +856,27 @@ def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
     L = []
     L.append("# Tailscale 远程连接 · 部署包")
     L.append("")
-    L.append("这个包的目标：**你不需要懂任何技术，运行两个文件就能让你的电脑被远程连进来。**")
+    L.append("这个包的目标：**你不需要懂任何技术，双击一下就能让你的电脑被远程连进来。**")
     L.append("")
-    L.append("## 就这几步")
+    L.append("## 你需要做的（真的只有一下）")
     L.append("")
     L.append("| 步骤 | Linux | Windows |")
     L.append("|---|---|---|")
-    L.append("| 1. 部署 | `bash deploy.sh` | 右键 `deploy.bat` → 以管理员身份运行 |")
-    L.append("| 2. 记下屏幕打印的 100.x.x.x | 同左 | 同左 |")
+    L.append("| 1. 部署 | `bash deploy.sh` | 双击 `deploy.bat`，弹窗点【是】 |")
+    L.append("| 2. 拿连接命令 | 窗口**最后一行** | 窗口**最后一行** |")
     L.append("| 3. 传文件（可选） | 用 `scp` 往本机发，见下 | 同左 |")
-    L.append("| 4. 用完清洗 | `bash clean.sh` | 右键 `clean.bat` → 以管理员身份运行 |")
+    L.append("| 4. 用完清洗 | `bash clean.sh` | 双击 `clean.bat` |")
     L.append("")
-    L.append("> 部署完之后屏幕会显示你的 Tailscale IP（形如 `100.x.x.x`）。")
-    L.append("> 回到你自己（控制端）的电脑上，用它连进来：")
+    L.append("> **全程不需要输入任何东西。** 密钥、入网凭证都已在包里备好，")
+    L.append("> 脚本会自己安装、自己配置、自己设成开机自启。")
+    L.append("")
+    L.append("> 部署完之后，窗口会单独框出**最后一行**，形如：")
+    L.append("> ```")
+    L.append("> ssh 你的用户名@100.x.x.x")
+    L.append("> ```")
+    L.append("> 把这一行发给要连你电脑的人，他粘贴执行即可，不用输密码。")
+    L.append("")
+    L.append("> 部署后包里还会多出一个 `连接信息.txt`，内容就是那行命令，方便随时翻。")
     if linux_on:
         L.append("> - Linux 被控端：`ssh 你的用户名@100.x.x.x`（走 Tailscale SSH，免密码）")
     if windows_on:
@@ -703,12 +887,18 @@ def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
     L.append("```")
     L.append("deploy.sh / deploy.bat   ★ 部署 —— 只需要这个")
     L.append("clean.sh  / clean.bat    ★ 清洗 —— 用完只需要这个")
+    L.append("连接信息.txt              部署后自动生成：那行连接命令")
     L.append("使用说明.txt              三步极简说明")
     L.append("README.md                本文件")
     L.append("程序/                    实现细节（不用打开）")
     L.append("  ├── linux/             脚本 + 预置二进制 + 你的密钥")
     L.append("  └── windows/")
     L.append("```")
+    L.append("")
+    L.append("## 开机自启")
+    L.append("")
+    L.append("Tailscale 服务与 sshd 服务都会被设为**开机自动启动**，并写入一个开机任务")
+    L.append("自动入网。也就是说这台电脑重启之后什么都不用点，依然能被连上。")
     L.append("")
     L.append("## 本包已预置的内容")
     L.append("")
@@ -783,9 +973,16 @@ def generate(repo_root, linux_on, windows_on, arch, auth, pub,
     os.makedirs(pkg_dir, exist_ok=True)
 
     if not auth:
-        log("[!] 未填写 Authkey：目标机运行时会改为交互式粘贴。")
+        log("[!] 未填 Authkey —— 对方无法自动入网，你还得把 key 单独发过去。")
+        log("    想做到『对方零输入』，请在界面上把 authkey 填好再生成。")
+    # ★ 零交互前提: Windows 包必须自带控制端公钥, 否则对方要手动粘。
+    #   这里【在生成阶段就补好】, 好让 README 和实际落盘内容一致。
+    pub = (pub or "").strip()
     if windows_on and not pub:
-        log("[!] 未填写控制端公钥：Windows 目标运行时会提示你粘贴。")
+        log("  · 未填控制端公钥 —— 自动生成一对 ed25519（对方将全程无需输入）")
+        _p, _pp, pub = generate_ssh_keypair(log=log)
+        if not pub:
+            log("[!] 无法自动生成公钥：对方机器上仍需手动粘贴公钥才能免密。")
 
     log(f"包名: {pkg_name}")
     assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
