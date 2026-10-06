@@ -1,0 +1,31 @@
+═══════════════════════════════════════════════════════════
+ ✅ 连接信息模板 (example —— 真实文件已被 .gitignore, 不入库)
+═══════════════════════════════════════════════════════════
+
+【你的两台机器】（把下面替换成你自己的）
+  本机 (主控端)  : <你的电脑名>      <Tailscale IP>   Windows/macOS/Linux
+  目标机 (被控端): <目标机名>        <Tailscale IP>   Linux  (用户: <用户名>)
+
+【日常连接命令】在你自己电脑的终端直接执行:
+
+    ssh <用户名>@<目标机Tailscale IP>
+
+  ★ 免密码、免公钥、免 -p 参数 —— 走 Tailscale SSH（端口 22）,
+    身份由 tailnet 认证（两台机器同账号即可）。
+
+【authkey 自动授权】二选一:
+  1. 把 key 写进本文件的下一行 (注意此文件 .gitignore 不入库):
+        TS_AUTHKEY=tskey-auth-xxxxxxxxxxxxxxxx
+  2. 或放进 keys/authkey.local.txt (推荐, 更直观)
+  3. 或 export TS_AUTHKEY=... 再跑脚本
+
+【目标机重启后】
+  无需任何操作 —— crontab 已配置开机自启 tailscaled（用户态）,
+  Tailscale SSH 随 tailscaled 自动可用。
+
+【重要注意事项】
+  1. auth key 用一次即消耗入网额度, 用后建议到 keys 管理页删除或轮换。
+  2. tailnet 里无用历史离线条目可在
+     https://login.tailscale.com/admin/machines 删除。
+  3. 建议把两台机器的 Key expiry 设为 Disable, 避免过期需重授权。
+═══════════════════════════════════════════════════════════

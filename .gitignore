@@ -1,0 +1,15 @@
+# ===== 绝不提交到公开仓库的敏感 / 体积文件 =====
+
+# 真实连接信息 (含真实 IP / 主机名 / Tailscale 账号)
+我的连接信息.txt
+
+# 真实 authkey —— keys/ 下的本地副本, 供临时存放, 不入库
+keys/authkey.local.txt
+
+# 预置静态二进制 (约 75MB, 通过 GitHub Release 或 stage-tailscale.sh 获取, 不入库)
+assets/tailscale
+assets/tailscaled
+
+# 杂项
+.DS_Store
+*.swp

@@ -1,0 +1,92 @@
+═══════════════════════════════════════════════════════════
+ 远程连接工具包 · 纯 Tailscale 离线版 (v0.2-offline)
+═══════════════════════════════════════════════════════════
+
+【这一版解决什么】
+ 原版 connect.sh 在「目标机没有 curl/wget/python3、无法联网下载
+ Tailscale」时会卡住。本版把依赖砍到最低, 并且只留纯 Tailscale 一条
+ 通道 —— 不碰任何要密码/要堡垒机的旁路:
+
+   · 二进制预置: Tailscale 静态二进制直接打进 assets/, 目标机零下载,
+     运行期完全不依赖 curl / wget / python3 / tar。
+   · 免密通道: 用 authkey 入网 + Tailscale SSH (tailscaled 内置服务端,
+     端口 22, tailnet 身份认证)。目标机不需要密码、不需要 sshd、
+     不需要 ssh 客户端、不需要任何传统 OpenSSH 组件。
+     —— 正好解决「拿不到密码/权限」的顾虑。
+   · 无 sudo: 用户态 ~/.tailscale, 不动系统。
+   · 不依赖 ss / netstat / tar。
+
+【目标机(被控端)运行期真实依赖】
+   bash  +  常见 coreutils(mkdir/cp/chmod/grep/sed/awk/date/sleep)
+        +  本包 assets/ 里的 tailscale / tailscaled
+   就这些。没有 curl/wget/python3/tar/ss/netstat/ssh/sshd 也能跑。
+
+【文件清单】
+  connect-offline.sh   纯 Tailscale 离线主脚本 (Linux 跑, bash)
+  stage-tailscale.sh   预置助手: 在有网机器把二进制打进 assets/
+  assets/              存放预置的 tailscale / tailscaled (静态二进制)
+ 我的连接信息.txt      你的两台机器连接信息 (沿用原版)
+
+【步骤 0 · 预置二进制 (只需做一次, 在有网的机器上)】
+  默认架构 amd64 (robot-system-4 是 x86_64 → amd64):
+      bash stage-tailscale.sh
+  其他架构 (arm64 / arm / 386):
+      bash stage-tailscale.sh arm64
+  成功后会看到 assets/ 下出现 tailscale、tailscaled。
+  ★ 这一步不可省: 离线目标机没有下载工具, 必须预置才能跑。
+    (旧版「在线回退下载」已彻底删除 —— 离线机根本没有 curl/wget。)
+
+【步骤 1 · 传包到目标机】
+  把整个「远程连接工具包-离线版」目录打成 tar.gz (保留执行位):
+      tar czf 远程连接工具包-离线版.tar.gz 远程连接工具包-离线版/
+  用 U 盘 / 向日葵文件传输 / scp 拷到目标机, 解包后:
+      bash connect-offline.sh
+
+【步骤 2 · 目标机运行 (选 [2] 被控端)】
+  回车默认就是 [2] 被控端。脚本会:
+    ① 从 assets/ 复制二进制到 ~/.tailscale (零下载)
+    ② 启动用户态 tailscaled
+    ③ 提示粘贴 auth key (到 login.tailscale.com 生成, 勾选允许 SSH)
+       —— 可提前把 key 写进 我的连接信息.txt 的 TS_AUTHKEY= 行,
+          或 export TS_AUTHKEY=... 免去交互粘贴
+    ④ 打印本机 Tailscale IP
+
+【步骤 3 · 你自己的电脑连接 (免密)】
+  在自己电脑的终端直接:
+      ssh robot@<目标机IP>            (走 Tailscale SSH, 免密码)
+      或  tailscale ssh robot@<目标机IP>
+  ★ 全程不需要目标机密码、不需要公钥、不需要 sshd。
+
+【依赖对比】
+  原版 connect.sh 运行期可能缺: curl / wget / python3 / tar / ss / netstat
+  本版 connect-offline.sh 运行期只需:
+      bash + coreutils + assets/ 预置二进制
+  全部删掉的旁路: 在线下载回退 / 反向 SSH 隧道 / bash 反弹壳 / 传统 sshd
+
+【注意】
+  · 本版 Linux 被控端专属; 你自己的 Windows/macOS 电脑用
+    tailscale ssh 直连, 不需要跑本脚本。
+  · 重启后自启: connect-offline.sh 在授权成功后会【自动】写入
+    crontab @reboot (默认 y, 已存在则跳过), 无需手动 crontab -e。
+  · 设备密钥过期掉线时, 重跑本脚本按提示粘贴新 key 即可。
+
+【用完清洗 · 完全不留痕】
+  用过之后想抹掉一切连接痕迹, 跑包内:
+      bash clean.sh            # 交互式, 每步确认
+      bash clean.sh -y         # 非交互, 一次性清本机全部
+  clean.sh 会依次:
+    ① 停掉并杀除 tailscaled 进程 (有网时顺便 logout, 设备转 offline)
+    ② 删除 ~/.tailscale/ 整个目录 —— 登录态/设备私钥/日志/复制出的
+       二进制/Tailscale SSH 服务端配置 全部清除, 本机彻底"失忆"
+    ③ 清掉 crontab 里的 @reboot 自启行
+    ④ (可选) 清 ~/.ssh/known_hosts 中 tailscale 的 100.x 条目
+    ⑤ (可选) 删除本工具解包目录本身
+  ⚠ 唯一清不掉的是【服务器侧】: Tailscale 账号「设备列表」里这台机器
+    仍会显示。彻底消失需两步 (要联网):
+      a) 联网后重跑 connect-offline.sh 选[2] 授权, 然后 clean.sh 的
+         logout 会让设备转 offline;
+      b) 打开 https://login.tailscale.com/admin/machines
+         找到本机 → 删除节点。删后无法再被连入。
+  ★ 安全护栏: clean.sh 只允许删 $HOME 下的 ~/.tailscale, 拒绝删其它路径;
+    以 root 运行会二次确认。本机清除零 sudo、零网络。
+═══════════════════════════════════════════════════════════

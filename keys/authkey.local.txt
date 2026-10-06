@@ -1,0 +1,12 @@
+# ============================================================
+#  authkey 临时存放点 (本文件已被 .gitignore 忽略，不会上传 GitHub)
+# ============================================================
+#  用法: 把你从 https://login.tailscale.com/admin/settings/keys
+#        生成的 auth key (以 tskey-auth- 开头) 粘贴到下面这一行:
+#
+#        TS_AUTHKEY=tskey-auth-xxxxxxxxxxxxxxxxxxxxxxxx
+#
+#  · 本文件不会上传到 GitHub (已在 .gitignore), 可放心存放真实 key。
+#  · connect-offline.sh 会自动读取此文件的 TS_AUTHKEY 行完成授权。
+#  · 用完记得用 clean.sh 清除, 或手动清空本文件。
+# ============================================================
