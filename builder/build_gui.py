@@ -750,58 +750,58 @@ def generate(repo_root, linux_on, windows_on, arch, auth, pub,
 # 字号策略: 基准 15px(比常规 UI 大一档), 辅助文字 13px, 标题 21px。
 # 所有尺寸同步放大, 避免"字小 + 控件挤"导致的可读性问题。
 STYLE = """
-QWidget { background:#EEF2F8; color:#16202E; font-size:15px; }
+QWidget { background:#EEF2F8; color:#16202E; font-size:18px; }
 QGroupBox {
     background:#FFFFFF; border:1px solid #D3DBE8; border-radius:12px;
     margin-top:18px; padding:20px 16px 16px 16px;
-    font-weight:bold; font-size:16px; color:#1E3A5F;
+    font-weight:bold; font-size:19px; color:#1E3A5F;
 }
 QGroupBox::title {
     subcontrol-origin: margin; left:14px; padding:2px 8px;
     color:#2C5A8C; background:#E8EFFA; border-radius:6px;
 }
 QLabel { background:transparent; }
-QLabel#hint { color:#5A6B85; font-size:13px; }
-QLabel#ok { color:#1B7F3B; font-size:13px; }
-QLabel#bad { color:#C0392B; font-size:13px; }
+QLabel#hint { color:#5A6B85; font-size:15px; }
+QLabel#ok { color:#1B7F3B; font-size:15px; }
+QLabel#bad { color:#C0392B; font-size:15px; }
 QLabel#summary {
     background:#E8F0FE; border:1px solid #B9CDF5; border-radius:8px;
-    padding:10px 12px; color:#1B3A6B; font-size:14px;
+    padding:12px 14px; color:#1B3A6B; font-size:16px;
 }
 QLineEdit, QPlainTextEdit, QComboBox {
     background:#FFFFFF; border:1px solid #B8C4D6; border-radius:7px;
-    padding:9px 11px; font-size:15px; selection-background-color:#2F6FED;
-    min-height:22px;
+    padding:11px 13px; font-size:18px; selection-background-color:#2F6FED;
+    min-height:26px;
 }
 QPlainTextEdit { line-height:1.5; }
 QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus { border:2px solid #2F6FED; }
 QComboBox::drop-down { border:none; width:26px; }
 QComboBox QAbstractItemView {
-    background:#FFFFFF; border:1px solid #B8C4D6; font-size:15px;
+    background:#FFFFFF; border:1px solid #B8C4D6; font-size:18px;
     selection-background-color:#2F6FED; selection-color:#FFFFFF; padding:4px;
 }
-QRadioButton, QCheckBox { background:transparent; spacing:10px; font-size:15px; padding:3px 0; }
+QRadioButton, QCheckBox { background:transparent; spacing:11px; font-size:18px; padding:5px 0; }
 QPushButton {
     background:#E4EAF4; border:1px solid #B8C4D6; border-radius:7px;
-    padding:10px 18px; color:#1E3A5F; font-size:14px; font-weight:bold;
+    padding:11px 20px; color:#1E3A5F; font-size:16px; font-weight:bold;
 }
 QPushButton:hover { background:#D5DFF0; border-color:#93A8C6; }
 QPushButton:pressed { background:#C6D4E8; }
 QPushButton:disabled { color:#9AA8BC; background:#EEF2F7; border-color:#DDE4EE; }
 QPushButton#primary {
     background:#2F6FED; color:#FFFFFF; border:none;
-    font-size:16px; font-weight:bold; padding:14px 34px; border-radius:9px;
+    font-size:19px; font-weight:bold; padding:15px 36px; border-radius:10px;
 }
 QPushButton#primary:hover { background:#2560DB; }
 QPushButton#primary:pressed { background:#1E52BC; }
 QPushButton#ghost {
     background:#FFFFFF; color:#2F6FED; border:2px solid #2F6FED;
-    font-size:14px; padding:8px 16px;
+    font-size:16px; padding:10px 18px;
 }
 QPushButton#ghost:hover { background:#EDF3FE; }
 QPlainTextEdit#log {
     background:#0F1724; color:#D8E4F5; border:1px solid #24334A; border-radius:8px;
-    font-family:Consolas,monospace; font-size:13px; padding:10px;
+    font-family:Consolas,monospace; font-size:15px; padding:12px;
 }
 QScrollArea { border:none; background:transparent; }
 QScrollBar:vertical { background:#E3E9F2; width:12px; border-radius:6px; }
@@ -826,11 +826,11 @@ if HAS_QT:
             super().__init__()
             self.setWindowTitle("Tailscale-Remote  离线部署包生成器")
             self.setStyleSheet(STYLE)
-            self.resize(1000, 1000)
-            self.setMinimumSize(880, 760)
+            self.resize(1120, 1080)
+            self.setMinimumSize(960, 800)
             app = QApplication.instance()
             if app is not None:
-                app.setFont(QFont("Microsoft YaHei", 11))
+                app.setFont(QFont("Microsoft YaHei", 13))
             self._build_ui()
             self._restore_config()      # 恢复上次选择(含记忆的密钥)
             self._scan_existing_key()
@@ -857,7 +857,7 @@ if HAS_QT:
             hl = QVBoxLayout(head)
             hl.setContentsMargins(18, 13, 18, 13)
             t1 = QLabel("Tailscale-Remote  离线部署包生成器")
-            t1.setStyleSheet("font-size:22px;font-weight:bold;color:#12263F;background:transparent;")
+            t1.setStyleSheet("font-size:26px;font-weight:bold;color:#12263F;background:transparent;")
             t2 = QLabel("勾选环境 → 填密钥 → 生成包。对方解压后只看得见 deploy / clean 两个要跑的文件。")
             t2.setObjectName("hint")
             hl.addWidget(t1)
@@ -895,7 +895,7 @@ if HAS_QT:
             self.txt_log = QPlainTextEdit()
             self.txt_log.setObjectName("log")
             self.txt_log.setReadOnly(True)
-            self.txt_log.setMinimumHeight(150)
+            self.txt_log.setMinimumHeight(190)
             lv.addWidget(self.txt_log)
             self.form.addWidget(g_log)
 
@@ -907,7 +907,7 @@ if HAS_QT:
             fl.setSpacing(10)
             self.btn_gen = QPushButton("生成部署包")
             self.btn_gen.setObjectName("primary")
-            self.btn_gen.setMinimumHeight(42)
+            self.btn_gen.setMinimumHeight(52)
             self.btn_gen.clicked.connect(self.on_generate)
             self.btn_open = QPushButton("打开输出目录")
             self.btn_open.clicked.connect(self.on_open)
@@ -934,16 +934,16 @@ if HAS_QT:
             h1.setSpacing(12)
             h1.addWidget(_label("目标平台"))
             self.cmb_os = QComboBox()
-            self.cmb_os.addItems(["Linux 被控端", "Windows 被控端", "双端都要（Linux + Windows）"])
+            self.cmb_os.addItems(["Linux 被控端", "Windows 被控端", "双端都要 (Linux + Windows)"])
             self.cmb_os.setCurrentIndex(2)
-            self.cmb_os.setMinimumWidth(280)
+            self.cmb_os.setMinimumWidth(300)
             self.cmb_os.currentIndexChanged.connect(self._sync_platform_state)
             h1.addWidget(self.cmb_os)
             h1.addSpacing(28)
             h1.addWidget(_label("Linux 架构"))
             self.cmb_arch = QComboBox()
             self.cmb_arch.addItems(["amd64 (x86_64)", "arm64 (aarch64)"])
-            self.cmb_arch.setFixedWidth(170)
+            self.cmb_arch.setFixedWidth(210)
             h1.addWidget(self.cmb_arch)
             h1.addStretch(1)
             v.addLayout(h1)
@@ -966,10 +966,10 @@ if HAS_QT:
             h.addWidget(_label("运行模式"))
             self.cmb_mode = QComboBox()
             self.cmb_mode.addItems([
-                "离线模式（推荐）— 包内自带二进制，对方完全不联网也能装",
-                "轻量模式 — 包很小不带二进制，对方需联网自动下载",
+                "离线（推荐）· 自带二进制，对方不联网也能装",
+                "轻量 · 不带二进制(约20KB)，对方需联网自动下载",
             ])
-            self.cmb_mode.setMinimumWidth(440)
+            self.cmb_mode.setMinimumWidth(470)
             self.cmb_mode.currentIndexChanged.connect(self._sync_mode_hint)
             h.addWidget(self.cmb_mode)
             h.addStretch(1)
@@ -985,9 +985,11 @@ if HAS_QT:
             v.setSpacing(9)
 
             top1 = QHBoxLayout()
-            top1.addWidget(_label("Tailscale Authkey"))
+            lbl_a = _label("Tailscale Authkey")
+            lbl_a.setWordWrap(False)
+            top1.addWidget(lbl_a)
             top1.addStretch(1)
-            b_open = QPushButton("① 去 Tailscale 后台生成")
+            b_open = QPushButton("① 去后台生成 authkey")
             b_open.setObjectName("ghost")
             b_open.clicked.connect(self._open_keys_url)
             top1.addWidget(b_open)
@@ -1008,7 +1010,7 @@ if HAS_QT:
             b_show.clicked.connect(self._toggle_auth_visible)
             h2.addWidget(b_show)
             h2.addSpacing(18)
-            self.cb_remember = QCheckBox("记住 authkey（明文存本机，仅限私人电脑）")
+            self.cb_remember = QCheckBox("记住 authkey（明文存本机）")
             self.cb_remember.toggled.connect(self._on_choice_changed)
             h2.addWidget(self.cb_remember)
             h2.addStretch(1)
@@ -1022,14 +1024,14 @@ if HAS_QT:
             v.addSpacing(5)
 
             top2 = QHBoxLayout()
-            lbl2 = _label("控制端 SSH 公钥（仅 Windows 被控端需要）")
+            lbl2 = _label("控制端 SSH 公钥（仅 Windows 需要）")
             lbl2.setWordWrap(False)          # 保持单行, 不被按钮挤换行
             top2.addWidget(lbl2)
             top2.addStretch(1)
-            b_gen = QPushButton("② 一键在本机生成密钥对")
+            b_gen = QPushButton("② 一键生成密钥对")
             b_gen.setObjectName("ghost")
             b_gen.clicked.connect(self._make_keypair)
-            b_force = QPushButton("强制重生成")
+            b_force = QPushButton("重生成")
             b_force.clicked.connect(lambda: self._make_keypair(force=True))
             top2.addWidget(b_gen)
             top2.addWidget(b_force)
@@ -1040,7 +1042,7 @@ if HAS_QT:
                 "ssh-ed25519 AAAA…\n"
                 "点上方『一键在本机生成』最省事 —— 自动生成并把公钥填到这里；\n"
                 "也可以从 控制端电脑的 ~/.ssh/id_ed25519.pub 复制整行粘进来。")
-            self.ed_pub.setMaximumHeight(84)
+            self.ed_pub.setMaximumHeight(104)
             v.addWidget(self.ed_pub)
             self.lbl_pub = _label("状态：未提供（Windows 目标机会被提示粘贴，或现场自动生成）", "hint")
             v.addWidget(self.lbl_pub)
@@ -1056,12 +1058,12 @@ if HAS_QT:
             self.cmb_fmt = QComboBox()
             self.cmb_fmt.addItems([".tar.gz  (Linux 原生)", ".zip  (Windows 原生)", "两种都生成"])
             self.cmb_fmt.setCurrentIndex(2)
-            self.cmb_fmt.setFixedWidth(190)
+            self.cmb_fmt.setFixedWidth(230)
             h1.addWidget(self.cmb_fmt)
             h1.addSpacing(20)
             h1.addWidget(_label("包名前缀"))
             self.ed_prefix = QLineEdit("tailscale-remote")
-            self.ed_prefix.setFixedWidth(190)
+            self.ed_prefix.setFixedWidth(230)
             h1.addWidget(self.ed_prefix)
             h1.addStretch(1)
             v.addLayout(h1)
@@ -1078,9 +1080,9 @@ if HAS_QT:
 
             h3 = QHBoxLayout()
             h3.setSpacing(18)
-            self.cb_7z_lin = QCheckBox("Linux 包内置便携 7-Zip  (+2.7MB)")
-            self.cb_7z_win = QCheckBox("Windows 包内置便携 7-Zip  (+0.6MB)")
-            self.cb_transfer = QCheckBox("包含传文件工具（双向收发 + 拖拽入口）")
+            self.cb_7z_lin = QCheckBox("Linux 内置 7-Zip (+2.7MB)")
+            self.cb_7z_win = QCheckBox("Windows 内置 7-Zip (+0.6MB)")
+            self.cb_transfer = QCheckBox("带传文件工具（双向+拖拽）")
             self.cb_transfer.setChecked(True)
             h3.addWidget(self.cb_7z_lin)
             h3.addWidget(self.cb_7z_win)
@@ -1403,7 +1405,7 @@ def main():
         print("(核心打包逻辑仍可无头调用: from build_gui import generate)")
         sys.exit(1)
     app = QApplication(sys.argv)
-    app.setFont(QFont("Microsoft YaHei", 11))
+    app.setFont(QFont("Microsoft YaHei", 13))
     w = MainWindow()
     w.show()
     sys.exit(app.exec_())
