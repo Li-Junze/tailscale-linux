@@ -2,7 +2,8 @@
 
 本目录用于**临时存放 Tailscale auth key**，方便快速查看与自动授权：
 
-- `authkey.local.txt` —— **本地占位文件，已被 `.gitignore` 忽略，不会上传到 GitHub**。
+- `authkey.local.txt` —— **本地文件，已被 `.gitignore` 忽略，不会上传到 GitHub**。
+  用生成器打包时会自动写入；手动使用则自己创建（格式见 `authkey.local.txt.example`）。
   把你从 https://login.tailscale.com/admin/settings/keys
   生成的 auth key（以 `tskey-auth-` 开头）按下面格式粘贴进去即可：
 

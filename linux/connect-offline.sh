@@ -21,7 +21,7 @@
 #
 #  用法:  bash connect-offline.sh
 # ============================================================
-SCRIPT_ID='v0.3.1-offline-20261006'
+SCRIPT_ID='v0.4-offline-20261006'
 echo "脚本版本: $SCRIPT_ID   (没有这一行 = 旧文件)"
 export DEBIAN_FRONTEND=noninteractive
 
@@ -57,7 +57,7 @@ need_cmds() {
   return 0
 }
 
-# ---------- 离线安装: 从 assets/ 复制预置静态二进制, 零下载 ----------
+# ---------- 安装 Tailscale: 优先用包内预置二进制(离线), 否则联网自取 ----------
 install_offline() {
   # 关键: 只判断文件【是否存在】(-f), 不要求可执行位(-x) —— Windows 打的 tar
   #       无法可靠保留 Unix 执行位, assets 常被打成 644, 用 -x 判断会误报
@@ -73,11 +73,69 @@ install_offline() {
     fi
     echo "      [X] 复制预置二进制失败 (磁盘只读?)"; return 1
   fi
-  echo "[X] assets/ 未预置 Tailscale 二进制 (缺 assets/tailscale 或 assets/tailscaled)。"
-  echo "    本包现在没有离线二进制, 无法在『下载工具缺失』的目标机上继续。"
-  echo "    在一台【有网】的机器上运行:  bash stage-tailscale.sh [arch]"
-  echo "      arch 默认 amd64; 其他: arm64 / arm / 386"
-  echo "    把生成的 assets/ 一起重新打包传过来, 再跑本脚本。"
+
+  # 轻量包(未内置二进制): 目标机有网时自己下载
+  echo "      本包为【轻量模式】(未内置二进制), 尝试联网下载 Tailscale 静态包 ..."
+  download_tailscale
+}
+# ---------- 联网下载 fallback (仅轻量模式需要) ----------
+# 架构名与 Tailscale 官方发布名对齐 (amd64/arm64/arm/386)
+detect_arch() {
+  local m; m="$(uname -m 2>/dev/null)"
+  case "$m" in
+    x86_64|amd64)  echo amd64 ;;
+    aarch64|arm64) echo arm64 ;;
+    armv7l|armv7)  echo arm ;;
+    i386|i686)     echo 386 ;;
+    *) echo "" ;;
+  esac
+}
+
+download_tailscale() {
+  local TA; TA="$(detect_arch)"
+  if [ -z "$TA" ]; then
+    echo "[X] 无法识别本机架构 ($(uname -m 2>/dev/null))。"
+    echo "    请在有网机器上用 stage-tailscale.sh 手动预置后拷入 assets/。"
+    return 1
+  fi
+  local DL
+  command -v curl >/dev/null 2>&1 && DL=curl
+  if [ -z "${DL:-}" ] && command -v wget >/dev/null 2>&1; then DL=wget; fi
+  if [ -z "${DL:-}" ]; then
+    echo "[X] 本包为【轻量模式】(未内置二进制), 且本机没有 curl / wget 无法下载。"
+    echo "    两条路任选其一:"
+    echo "      A) 换一台有网的机器执行:  bash stage-tailscale.sh ${TA}"
+    echo "         再把生成的 assets/ 拷进 程序/linux/assets/ 重跑本脚本"
+    echo "      B) 重新打包时勾选【离线模式】, 用内置二进制的完整包"
+    return 1
+  fi
+  local TMP="$HOME/.tailscale_dl"
+  local URL="https://pkgs.tailscale.com/stable/tailscale_latest_${TA}.tgz"
+  rm -rf "$TMP"; mkdir -p "$TMP/x"
+  echo "      本机架构: $TA"
+  echo "      下载: $URL"
+  if [ "$DL" = "curl" ]; then
+    curl -fsSL --connect-timeout 20 -o "$TMP/ts.tgz" "$URL" \
+      || { echo "      [X] 下载失败 (无外网/被墙?)"; rm -rf "$TMP"; return 1; }
+  else
+    wget -q -T 20 -O "$TMP/ts.tgz" "$URL" \
+      || { echo "      [X] 下载失败 (无外网/被墙?)"; rm -rf "$TMP"; return 1; }
+  fi
+  [ -s "$TMP/ts.tgz" ] || { echo "      [X] 下载内容为空"; rm -rf "$TMP"; return 1; }
+  command -v tar >/dev/null 2>&1 || { echo "      [X] 缺 tar, 无法解包"; rm -rf "$TMP"; return 1; }
+  echo "      解包 ..."
+  tar xzf "$TMP/ts.tgz" -C "$TMP/x" --strip-components=1 \
+    || { echo "      [X] 解包失败"; rm -rf "$TMP"; return 1; }
+  mkdir -p "$TSDIR"
+  cp -f "$TMP/x/tailscale"  "$TSDIR/tailscale"  2>/dev/null
+  cp -f "$TMP/x/tailscaled" "$TSDIR/tailscaled" 2>/dev/null
+  chmod +x "$TSDIR/tailscale" "$TSDIR/tailscaled" 2>/dev/null
+  rm -rf "$TMP"
+  if [ -f "$TSDIR/tailscale" ] && [ -f "$TSDIR/tailscaled" ]; then
+    echo "      ✅ 联网获取成功 (已放入 $TSDIR)"
+    return 0
+  fi
+  echo "      [X] 下载包结构异常, 未找到 tailscale / tailscaled"
   return 1
 }
 

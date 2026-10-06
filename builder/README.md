@@ -1,26 +1,63 @@
-# 配置生成器（可视化一键打包）
+# 配置生成器（★ 双击 `★运行生成器.bat` 即可）
 
-本目录是给**操作员（你）**用的本地图形界面：按目标机环境勾选 / 填写，
-一键生成「配置已烘焙、目标机点击即运行」的离线压缩包。
+给**操作员（你）**用的本地图形界面：按目标机环境勾选 / 填密钥，
+一键生成「配置已烘焙、对方解压后只跑两个文件」的部署包。
 
 ## 运行
 
 ```bat
-双击 运行生成器.bat
+双击 ★运行生成器.bat
 :: 或手动：
 python build_gui.py
 ```
 
-> 依赖 PyQt5：若未安装，`pip install PyQt5` 即可（你的 OCR 项目环境通常已带）。
+> 依赖 PyQt5：若未安装，`pip install PyQt5` 即可。
+> `★运行生成器.bat` 会自动找本机 python（python / py），并附带友好报错。
 
-## 界面说明
+## 界面说明（四步）
 
 | 区域 | 作用 |
 |---|---|
-| ① 目标环境 | 选 Linux / Windows / 双端；Linux 还能选 amd64 / arm64 |
-| ② 凭证与密钥 | 填 Tailscale Authkey（会写进包内 `keys/authkey.local.txt`）；<br>控制端公钥（仅 Windows 需要，写进 `windows/keys/control.pub`） |
-| ③ 打包选项 | 输出格式（.tar.gz / .zip / 两者）、输出目录、包名前缀、<br>**是否内置便携 7-Zip**（Linux / Windows 各一个勾选框） |
+| ① 目标环境 | 选 Linux / Windows / 双端；Linux 可选 amd64 / arm64 |
+| ② 运行模式 | **离线模式**（包内自带二进制，对完全不联网）或 **轻量模式**（包仅几十 KB，对需联网自动下载） |
+| ③ 密钥 | Tailscale Authkey（带格式校验）；**一键在本机生成 SSH 密钥对**并自动填公钥（仅 Windows 被控端需要） |
+| ④ 打包选项 | 输出格式（.tar.gz / .zip / 两者）、输出目录、包名前缀、**是否内置便携 7-Zip** |
 | 运行日志 | 实时显示打包过程 |
+
+## 生成出的包长什么样（刻意做得很干净）
+
+```
+tailscale-remote-<平台>-<离线|轻量>-<日期>/
+├── deploy.sh / deploy.bat    ★ 部署 —— 对方只需要跑这个
+├── clean.sh  / clean.bat     ★ 清洗 —— 用完只需要跑这个
+├── README.md                 面向拿到包的人写的说明
+├── 使用说明.txt               三步极简说明
+└── 程序/                     ← 所有实现细节收纳于此，不用打开
+    ├── linux/     (若选了)    脚本 + 预置二进制 + 你的 authkey
+    └── windows/   (若选了)    脚本 + 预置 MSI   + 你的 authkey / 公钥
+```
+
+- **Linux 目标**：`bash deploy.sh`（会 `cd 程序/linux` 再跑主脚本）
+- **Windows 目标**：右键 `deploy.bat` → 以管理员身份运行
+- 两种平台的 `clean` 都会删除**整个包根**（不只是脚本所在那层）
+
+## 离线 vs 轻量
+
+| | 离线模式（默认，推荐） | 轻量模式 |
+|---|---|---|
+| 包体积 | ~67 MB | ~几十 KB |
+| 包内二进制 | tailscale / tailscaled / MSI 全带 | 全部剥离 |
+| 目标机要求 | **完全不需要联网**，没 curl/wget 也行 | 需能联网，脚本自动下载官方安装包 |
+| 适合 | 目标机可能断网 / 环境极简 | 目标机能上网，在意传输体积 |
+
+## 密钥
+
+- **Tailscale Authkey**：本地无法生成，需到 <https://login.tailscale.com/admin/settings/keys> 创建
+  （建议勾 Reusable、过期设 Disable）。界面里点「① 去 Tailscale 后台生成」会直接打开该页面，
+  粘贴后会实时校验是否以 `tskey-auth-` 开头。
+- **控制端 SSH 公钥**（仅 Windows 被控端需要）：点「② 一键在本机生成密钥对」最省事 ——
+  会在本机 `~/.ssh/id_ed25519` 生成一对（无口令）并把公钥自动填进输入框。
+  私钥必须留在你自己（控制端）电脑上，不要发给任何人。
 
 ## 便携 7-Zip 选项
 
@@ -28,39 +65,19 @@ python build_gui.py
 
 | 勾选后打进包 | 体积 | 目标机上怎么用 |
 |---|---|---|
-| `linux/assets/7zip/7zz`（静态，无依赖） | +2.7 MB | `./assets/7zip/7zz x 包.tar.gz` |
-| `windows/assets/7zip/7za.exe`（单文件） | +0.6 MB | `.\assets\7zip\7za.exe x 包.tar.gz` |
+| `程序/linux/assets/7zip/7zz`（静态，无依赖） | +2.7 MB | `./程序/linux/assets/7zip/7zz x 包.tar.gz` |
+| `程序/windows/assets/7zip/7za.exe`（单文件） | +0.6 MB | `.\程序\windows\assets\7zip\7za.exe x 包.tar.gz` |
 
-- **不勾选**：`assets/7zip` 会被自动从包里剔除，包更小（适合确定目标机自带 tar / 7-Zip 的情况）。
+- **不勾选**：`assets/7zip` 会被自动剔除，省体积。
 - 7-Zip 是闭源二进制，**不入 Git 仓库**。首次勾选前先拉一次（只需联网一次）：
   ```bat
   python builder\fetch_7zip.py
   :: 或只拉一个：python builder\fetch_7zip.py windows
   ```
   已存在会自动跳过，`--force` 强制重下。
-- 两个可执行物在打包时会被强制打上 **755 执行位**，Linux 下解压即可直接跑。
-
-## 生成出的包长什么样
-
-```
-tailscale-remote-<os>-<日期>/
-├── 连接说明.txt          # 目标机按这个跑就行
-├── 一键部署.sh / .bat     # 顶层一键启动（按所选平台生成）
-├── README.md             # 仓库总览
-├── linux/   (若选了)      # 含已写好的 keys/authkey.local.txt + 运行.sh
-│   └── assets/7zip/7zz   (若勾选内置 7-Zip)
-└── windows/ (若选了)      # 含已写好的 keys/authkey.local.txt + control.pub
-    └── assets/7zip/7za.exe  (若勾选内置 7-Zip)
-```
-
-- **Linux 目标**：双击 `一键部署.sh` 或 `linux/运行.sh`，或 `cd linux && bash connect-offline.sh`
-- **Windows 目标**：右键 `windows/connect-windows.bat` → 以管理员身份运行
-  （也可双击顶层 `一键部署.bat`）
-
-因为 authkey / 公钥已经烘焙进包，**目标机无需联网下载、无需手动填 key，点开就能部署**。
 
 ## 安全提示
 
-- Authkey 以明文写入包内 `keys/`，只发给可信目标；对方 `clean` 会清除。
+- Authkey 以明文写入包内 `程序/<平台>/keys/`，只发给可信目标；对方跑 clean 会清除。
 - 建议在 Tailscale 后台用「限设备 / 可过期」的 key。
-- 彻底下线还需到 https://login.tailscale.com/admin/machines 删除节点。
+- 彻底下线还需到 <https://login.tailscale.com/admin/machines> 删除节点。

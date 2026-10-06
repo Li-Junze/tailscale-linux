@@ -4,7 +4,9 @@
 
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$MSI       = Join-Path $ScriptDir 'assets\tailscale-setup-1.102.4-amd64.msi'
+# 不写死版本号: 通配取 assets\ 下任意 tailscale-setup-*.msi
+$MSI       = (Get-ChildItem (Join-Path $ScriptDir 'assets') -Filter 'tailscale-setup-*.msi' -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 $AdminKeys = 'C:\ProgramData\ssh\administrators_authorized_keys'
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {

@@ -11,11 +11,13 @@
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $TSExe    = 'C:\Program Files\Tailscale\tailscale.exe'
-$MSI      = Join-Path $ScriptDir 'assets\tailscale-setup-1.102.4-amd64.msi'
+# 不写死版本号: 通配取 assets\ 下任意 tailscale-setup-*.msi (换版本无需改脚本)
+$MSI      = (Get-ChildItem (Join-Path $ScriptDir 'assets') -Filter 'tailscale-setup-*.msi' -ErrorAction SilentlyContinue |
+             Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
 $KeysDir  = Join-Path $ScriptDir 'keys'
 $AdminKeys= 'C:\ProgramData\ssh\administrators_authorized_keys'
 $script:GenKeyPath = $null   # 若本脚本代生成密钥对, 记录私钥路径, Finish 时打印 -i 连接命令
-$SCRIPT_ID = 'v0.5-win-20261006'
+$SCRIPT_ID = 'v0.6-win-20261006'
 
 function Banner($m){ Write-Host ''; Write-Host "==== $m ====" -ForegroundColor Cyan }
 
@@ -28,17 +30,36 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 Banner "纯 Tailscale 离线版 · Windows 被控端 $SCRIPT_ID"
 Write-Host "本机用户: $env:USERNAME   主机名: $env:COMPUTERNAME"
 
-# ---- 1. 安装 Tailscale (预置 MSI, 离线) ----
+# ---- 1. 安装 Tailscale (优先预置 MSI 离线; 轻量包则联网下载 EXE) ----
 function Install-Tailscale {
-    if (Test-Path $TSExe) { Write-Host '[1/5] Tailscale 已安装, 跳过 MSI.'; return }
+    if (Test-Path $TSExe) { Write-Host '[1/5] Tailscale 已安装, 跳过安装.'; return }
+
     if (-not (Test-Path $MSI)) {
-        Write-Host "[X] 未找到预置 MSI: $MSI" -ForegroundColor Red
-        Write-Host '      请使用 Release 完整包 (含 assets), 或用 stage 脚本预置.' -ForegroundColor Yellow
-        Read-Host '回车退出'; exit 1
+        # 轻量模式: 包内无 MSI, 联网下载官方安装器
+        Write-Host '[1/5] 本包为【轻量模式】(未内置 MSI), 联网下载 Tailscale 安装器 ...' -ForegroundColor Cyan
+        $tmpExe = Join-Path $env:TEMP 'tailscale-setup.exe'
+        $url = 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe'
+        try {
+            Write-Host "      下载: $url"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $url -OutFile $tmpExe -UseBasicParsing -TimeoutSec 180
+        } catch {
+            Write-Host "[X] 下载失败: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host '    两条路任选其一:' -ForegroundColor Yellow
+            Write-Host '      A) 让这台机器联网后重跑本脚本' -ForegroundColor Yellow
+            Write-Host '      B) 换一台有网机器下载 MSI, 拷到 程序\windows\assets\ 后重跑' -ForegroundColor Yellow
+            return
+        }
+        if (-not (Test-Path $tmpExe)) { Write-Host '[X] 下载器未生成' -ForegroundColor Red; return }
+        Write-Host '      运行安装器 ...'
+        $p = Start-Process $tmpExe -ArgumentList '/quiet' -Wait -PassThru
+        Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path $TSExe)) { Write-Host "[X] 安装失败 exit=$($p.ExitCode)" -ForegroundColor Red; return }
+    } else {
+        Write-Host '[1/5] 安装 Tailscale (预置 MSI, 离线零下载)...'
+        $p = Start-Process msiexec.exe -ArgumentList "/i `"$MSI`" /quiet /norestart" -Wait -PassThru
+        if ($p.ExitCode -ne 0) { Write-Host "[X] MSI 安装失败 exit=$($p.ExitCode)" -ForegroundColor Red; return }
     }
-    Write-Host '[1/5] 安装 Tailscale (预置 MSI, 离线零下载)...'
-    $p = Start-Process msiexec.exe -ArgumentList "/i `"$MSI`" /quiet /norestart" -Wait -PassThru
-    if ($p.ExitCode -ne 0) { Write-Host "[X] MSI 安装失败 exit=$($p.ExitCode)" -ForegroundColor Red; Read-Host '回车退出'; exit 1 }
     $t=0; while ($t -lt 30) { if (Get-Service tailscale -ErrorAction SilentlyContinue) { break }; Start-Sleep 1; $t++ }
     Write-Host '      Tailscale 安装完成, 服务已注册.'
 }
