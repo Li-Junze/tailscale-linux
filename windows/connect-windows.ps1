@@ -14,7 +14,7 @@ $TSExe    = 'C:\Program Files\Tailscale\tailscale.exe'
 $MSI      = Join-Path $ScriptDir 'assets\tailscale-setup-1.102.4-amd64.msi'
 $KeysDir  = Join-Path $ScriptDir 'keys'
 $AdminKeys= 'C:\ProgramData\ssh\administrators_authorized_keys'
-$SCRIPT_ID = 'v0.1-win-20261006'
+$SCRIPT_ID = 'v0.2-win-20261006'
 
 function Banner($m){ Write-Host ''; Write-Host "==== $m ====" -ForegroundColor Cyan }
 
@@ -79,15 +79,30 @@ function Enable-SSHServer {
 }
 
 # ---- 4. 部署控制端公钥 (免密) ----
+function Print-KeyHelp {
+    Write-Host '      ── 如何在【控制端电脑】上拿到你的公钥 (复制输出整行) ──' -ForegroundColor DarkCyan
+    Write-Host '      ① 控制端是 Windows (PowerShell / CMD):' -ForegroundColor White
+    Write-Host '          type %USERPROFILE%\.ssh\id_ed25519.pub' -ForegroundColor Green
+    Write-Host '          若提示"找不到文件", 先生成密钥对 (一路回车即可):' -ForegroundColor Gray
+    Write-Host '          ssh-keygen -t ed25519 -N "" -f %USERPROFILE%\.ssh\id_ed25519' -ForegroundColor Green
+    Write-Host '      ② 控制端是 Linux / macOS / WSL:' -ForegroundColor White
+    Write-Host '          cat ~/.ssh/id_ed25519.pub' -ForegroundColor Green
+    Write-Host '          若没有:  ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519' -ForegroundColor Green
+    Write-Host '      ③ 已有 keys/ 目录里的 *.pub 文件则无需粘贴, 脚本自动读取.' -ForegroundColor Gray
+    Write-Host '      (复制 ssh-ed25519 AAAA... 开头的那整行, 回到下面粘贴)' -ForegroundColor DarkCyan
+}
+
 function Install-PubKeys {
     Write-Host '[4/5] 部署控制端公钥 (免密登录)...'
+    Print-KeyHelp
     $pubs = @()
     Get-ChildItem $KeysDir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.pub(\.local)?$' } | ForEach-Object { (Get-Content $_.FullName) | ForEach-Object { if ($_.Trim()) { $pubs += $_.Trim() } } }
-    $extra = Read-Host '粘贴额外公钥 (可直接粘贴一行 ssh-ed25519 ..., 或回车用 keys/ 内文件)'
+    $extra = Read-Host '粘贴控制端公钥 (直接粘一行 ssh-ed25519 ..., 或回车用 keys/ 内文件)'
     if ($extra.Trim()) { $pubs += $extra.Trim() }
     if ($pubs.Count -eq 0) {
-        Write-Host '      [!] 未找到任何公钥, 控制端将无法免密登录.' -ForegroundColor Red
-        Write-Host '      把控制端公钥( id_ed25519.pub )放入 keys/ 或上面粘贴.' -ForegroundColor Yellow
+        Write-Host '      [!] 还未检测到任何公钥, 控制端将无法免密登录.' -ForegroundColor Red
+        Write-Host '      请按上方指示, 在控制端电脑执行取钥命令, 然后把那整行粘回来.' -ForegroundColor Yellow
+        Print-KeyHelp
         return
     }
     if (-not (Test-Path 'C:\ProgramData\ssh')) { New-Item -ItemType Directory -Path 'C:\ProgramData\ssh' -Force | Out-Null }
@@ -118,4 +133,5 @@ Join-Tailnet
 Enable-SSHServer
 Install-PubKeys
 Finish
+
 

@@ -46,3 +46,4 @@ Write-Host '本机连接痕迹已清除 (服务/功能/公钥/状态目录).' -F
 Write-Host '⚠ 服务器侧设备仍会显示: 需联网后到 https://login.tailscale.com/admin/machines 删除该节点.' -ForegroundColor Yellow
 Read-Host '回车退出'
 
+

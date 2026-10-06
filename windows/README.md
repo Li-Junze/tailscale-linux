@@ -40,9 +40,27 @@ Tailscale 内置 SSH **不支持 Windows 服务端**（`tailscale up --ssh` 在 
 extract.bat          :: 或在资源管理器右键解压
 ```
 
-### 2. 放好密钥/公钥（可选，省得交互粘贴）
-- `keys/authkey.local.txt` 写 `TS_AUTHKEY=tskey-...`
-- `keys/` 下放你的控制端公钥 `id_ed25519.pub`（或 `.pub.local`）
+### 2. 准备好密钥（authkey + 控制端公钥）
+
+**authkey**（让被控端入网）：
+- `keys/authkey.local.txt` 写一行 `TS_AUTHKEY=tskey-...`（从 Tailscale 后台生成，带 Devices 写权限）
+
+**控制端公钥**（免密登录，必填一项）：
+- 把控制端电脑上的公钥放进 `keys/`：`id_ed25519.pub`（或 `.pub.local`）
+- 或在脚本第 4 步直接粘贴。若不知道去哪拿，在**你的控制端电脑**上执行：
+
+  ```bat
+  :: 控制端是 Windows
+  type %USERPROFILE%\.ssh\id_ed25519.pub
+  :: 若提示找不到文件，先生成（一路回车）
+  ssh-keygen -t ed25519 -N "" -f %USERPROFILE%\.ssh\id_ed25519
+  ```
+  ```bash
+  # 控制端是 Linux / macOS / WSL
+  cat ~/.ssh/id_ed25519.pub
+  # 若没有：ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+  ```
+  复制输出的 `ssh-ed25519 AAAA...` 整行即可（脚本运行时也会打印这段指示）。
 
 ### 3. 部署（必须管理员）
 右键 `connect-windows.bat` → **以管理员身份运行**，按提示走完 5 步：
