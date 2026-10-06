@@ -35,6 +35,11 @@ builder/_build/
 builder/_verify/
 builder/_v_*/
 
+# 传文件工具的收件目录(运行时产物, 不入库)
+tools/inbox/
+tools/收件箱/
+程序/文件传输/inbox/
+
 # Python 缓存
 __pycache__/
 *.pyc
