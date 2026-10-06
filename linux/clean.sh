@@ -135,10 +135,20 @@ clean_known_hosts() {
 }
 
 # ---------- 5. 删除解包目录本身 (可选) ----------
+# ★ 部署包结构: <包根>/{deploy.sh,clean.sh,程序/linux/...}
+#   本脚本在 程序/linux/ 下, 真正该删的是【包根】(上两级), 否则只会删掉
+#   程序/linux 这一层, 顶层入口和 windows 部分会残留。
+PKG_ROOT="$(cd "$SCRIPT_DIR/../.." 2>/dev/null && pwd)"
+if [ -f "$PKG_ROOT/deploy.sh" ] || [ -f "$PKG_ROOT/deploy.bat" ]; then
+  DEL_TARGET="$PKG_ROOT"          # 认得包根结构 → 删整个包
+else
+  DEL_TARGET="$SCRIPT_DIR"        # 旧结构(脚本直接在包里) → 删自身目录
+fi
+
 remove_pkg() {
   echo ""
   echo "[5/5] 是否删除本工具解包目录?"
-  echo "      目录: $SCRIPT_DIR"
+  echo "      目录: $DEL_TARGET"
   if ask n "      删除后无法再次使用本工具, 确认删除? (默认 n)"; then
     # 把待删目录登记, 放最后执行, 避免删掉正在运行的脚本文件
     echo "      ✅ 已标记, 将在最后删除"
@@ -174,7 +184,7 @@ echo "         找到本机设备 → 右键/菜单 → Delete (删除节点)。
 echo "     删除节点后, 这台机器在 tailnet 中彻底消失, 无法再被连入。"
 echo ""
 if [ "${DEL_PKG:-0}" = 1 ]; then
-  echo "  正在删除工具包目录: $SCRIPT_DIR"
-  rm -rf "$SCRIPT_DIR" 2>/dev/null && echo "  ✅ 工具包目录已删除" || echo "  [!] 删除失败, 请手动 rm -rf $SCRIPT_DIR"
+  echo "  正在删除工具包目录: $DEL_TARGET"
+  rm -rf "$DEL_TARGET" 2>/dev/null && echo "  ✅ 工具包目录已删除" || echo "  [!] 删除失败, 请手动 rm -rf '$DEL_TARGET'"
 fi
 echo "======================================================"

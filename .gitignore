@@ -5,7 +5,9 @@
 linux/我的连接信息.txt
 
 # 真实 authkey —— keys/ 下的本地副本, 供临时存放, 不入库
+# (注意: 仓库里保留一个占位文件 keys/authkey.local.txt.example 作为格式说明)
 linux/keys/authkey.local.txt
+windows/keys/authkey.local.txt
 
 # 预置静态二进制 (约 75MB, 通过 GitHub Release 或 stage-tailscale.sh 获取, 不入库)
 linux/assets/tailscale

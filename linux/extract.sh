@@ -31,7 +31,11 @@ chmod +x "$SCRIPT_DIR"/*.sh 2>/dev/null
 
 echo ""
 echo "=== 解压完成 ==="
-if [ -f "$SCRIPT_DIR/connect-offline.sh" ]; then
+if [ -f "$SCRIPT_DIR/../deploy.sh" ]; then
+  echo "包版本: $(grep -m1 SCRIPT_ID= "$SCRIPT_DIR/connect-offline.sh" | cut -d"'" -f2)"
+  echo ""
+  echo "下一步（只需这一个）: bash deploy.sh"
+elif [ -f "$SCRIPT_DIR/connect-offline.sh" ]; then
   echo "脚本版本: $(grep -m1 SCRIPT_ID= "$SCRIPT_DIR/connect-offline.sh" | cut -d"'" -f2)"
   echo "下一步   : bash connect-offline.sh"
 else

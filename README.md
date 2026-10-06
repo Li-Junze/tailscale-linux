@@ -1,6 +1,6 @@
 # tailscale-remote
 
-纯 Tailscale 离线远程连接工具包 —— 面向**「目标机没有 curl / wget / python3，无法联网下载」**的机器，
+纯 Tailscale 远程连接部署包 —— 面向**「目标机没有 curl / wget / python3，无法联网下载」**的机器，
 把依赖砍到极致：**零额外下载、免密连接、用完一键不留痕**。
 
 覆盖两类被控端（被连入的机器）：
@@ -14,108 +14,116 @@
 
 ---
 
-## 目录结构（已按平台清晰拆分）
+## 最快路径：双击 `builder/★运行生成器.bat`
+
+不想手动拼包、填 key、选模式？跑生成器，四步点完就出包：
+
+```
+① 目标环境   Linux / Windows / 双端
+② 运行模式   离线（自带二进制，67MB）/ 轻量（不带，几十KB）
+③ 密钥       贴 authkey；点一下自动生成 SSH 密钥对
+④ 打包选项   格式 / 输出目录 / 要不要内置便携 7-Zip
+```
+
+生成的包**顶层只有 4 个要碰的东西**，其余全部收进 `程序/`：
+
+```
+tailscale-remote-<平台>-<离线|轻量>-<日期>/
+├── deploy.sh / deploy.bat    ★ 部署 —— 对方只需要跑这个
+├── clean.sh  / clean.bat     ★ 清洗 —— 用完只需要跑这个
+├── README.md                 说明（写给拿到包的人看）
+├── 使用说明.txt               三步极简说明
+└── 程序/                     实现细节，不用打开
+    ├── linux/                脚本 + 预置二进制 + 你的 authkey
+    └── windows/              脚本 + 预置 MSI   + 你的 authkey / 公钥
+```
+
+对方拿到包后：解压 → 跑 `deploy` → 记下屏幕打印的 `100.x.x.x` → 用完跑 `clean`。就这些。
+
+---
+
+## 仓库结构（本仓库 = 生成器的素材源）
 
 ```
 tailscale-remote/
-├── README.md                  # 本文件：总览 + 安全说明
-├── 我的连接信息.example.txt    # 连接信息脱敏模板（真实文件不入库）
+├── README.md                  本文件
+├── 我的连接信息.example.txt    连接信息脱敏模板（真实文件不入库）
 │
-├── linux/                     # ★ Linux 被控端（离线零下载）
-│   ├── connect-offline.sh     #   离线部署主脚本（核心）
+├── linux/                     ★ Linux 被控端
+│   ├── connect-offline.sh     #   部署主脚本（离线优先，缺二进制则联网自取）
 │   ├── clean.sh               #   用完清洗 —— 完全不留痕
 │   ├── stage-tailscale.sh     #   预置助手：在有网机器把二进制打进 assets/
 │   ├── extract.sh             #   解压助手（一键解包 + 修复执行位）
 │   ├── 使用说明(离线版).txt    #   详细中文使用说明
-│   ├── assets/                #   预置 tailscale / tailscaled（见 README，不入库）
-│   └── keys/                  #   ★ authkey 临时存放点（authkey.local.txt 不入库）
+│   ├── assets/                #   预置 tailscale / tailscaled（不入库）
+│   └── keys/                  #   authkey 临时存放点（不入库）
 │
-├── windows/                   # ★ Windows 被控端（离线部署）
+├── windows/                   ★ Windows 被控端
 │   ├── connect-windows.bat    #   入口：自动提权并以管理员运行 .ps1
 │   ├── connect-windows.ps1    #   部署主逻辑（装 Tailscale / 入网 / 开 OpenSSH / 部署公钥 / 自启）
 │   ├── clean-windows.bat      #   清洗入口（管理员）
 │   ├── clean-windows.ps1      #   清洗逻辑
 │   ├── extract.bat            #   解压助手（解 .tar.gz）
 │   ├── README.md              #   Windows 详细说明
-│   ├── assets/                #   预置 Tailscale MSI（见 README，不入库）
+│   ├── assets/                #   预置 Tailscale MSI（不入库）
 │   └── keys/                  #   authkey + 控制端公钥临时存放点
 │
-└── builder/                   # 配置生成器（PyQt5 可视化一键打包，见 builder/README.md）
+└── builder/                   ★ 配置生成器
+    ├── ★运行生成器.bat         #   双击启动（醒目入口）
     ├── build_gui.py           #   图形界面主程序
-    └── 运行生成器.bat         #   双击启动
+    ├── fetch_7zip.py          #   拉取官方便携 7-Zip 二进制（可选）
+    └── README.md              #   生成器详细说明
 ```
 
-> 两个平台完全平级、互不嵌套。`linux/` 里只放 Linux 相关文件，`windows/` 里只放 Windows 相关文件，
-> 顶部只放总览文档与共享模板，结构一目了然。
+> 两个被控端目录完全平级、互不嵌套；生成器会把它们收进目标包的 `程序/` 下，
+> 顶层只留醒目入口与文档。
 
 ---
 
-## 快速开始
+## 不用生成器时：手动跑
 
-### 0. 拿到带二进制的离线包
+### 0. 预置二进制（约 110MB，不进 git）
 
-二进制约 75MB，不进 git。二选一：
+- **Linux**：`cd linux && bash stage-tailscale.sh amd64`（有网机器执行，会把二进制放进 `linux/assets/`）
+- **Windows**：把官方 `tailscale-setup-*.msi` 放进 `windows/assets/`
+- 或者到本仓库 **Releases** 下载已含二进制的完整包。
 
-- **A. 下载开箱即用完整包（推荐）**：到本仓库 **Releases** 下载 `tailscale-remote-full.tar.gz`
-  （已同时包含 Linux 二进制与 Windows MSI）。
-- **B. 自己预置**：在有网机器上 `cd linux && bash stage-tailscale.sh amd64`，再把整个目录打包传过去
-  （Windows 的 MSI 也需单独放入 `windows/assets/`）。
-
-### 1. 解压
+### 1. 部署
 
 ```bash
-# Linux / macOS / WSL 终端，在包所在目录执行：
-tar xzf tailscale-remote-full.tar.gz
-cd tailscale-remote
+# Linux 被控端
+cd linux && bash connect-offline.sh       # 回车默认选 [2] 被控端
 ```
-
-Windows 上可用系统自带 `tar -xzf tailscale-remote-full.tar.gz`，或 7-Zip 右键解压。
-
-### 2. Linux 被控端
-
-```bash
-cd tailscale-remote/linux
-bash connect-offline.sh          # 回车默认选 [2] 被控端
-```
-
-详见 [`linux/使用说明(离线版).txt`](linux/使用说明(离线版).txt) 与 [`linux/README.md`](linux/README.md)。
-
-### 3. Windows 被控端
 
 ```bat
-cd tailscale-remote\windows
-:: 右键 connect-windows.bat → 以管理员身份运行
+:: Windows 被控端：右键 connect-windows.bat → 以管理员身份运行
 ```
 
-详见 [`windows/README.md`](windows/README.md)。
-
-### 4. 用完清洗（完全不留痕）
+### 2. 用完清洗
 
 ```bash
 # Linux
-cd tailscale-remote/linux && bash clean.sh        # 或 bash clean.sh -y 非交互
-# Windows：右键 clean-windows.bat → 以管理员身份运行
+bash clean.sh            # 交互式
+bash clean.sh -y         # 非交互
 ```
+
+```bat
+:: Windows：右键 clean-windows.bat → 以管理员身份运行
+```
+
+详见 [`linux/README.md`](linux/README.md)、[`linux/使用说明(离线版).txt`](linux/使用说明(离线版).txt)、[`windows/README.md`](windows/README.md)。
 
 ---
 
-## 配置生成器（可视化一键打包）
+## 离线 vs 轻量
 
-不想手动拼包？仓库自带一个**本地图形界面** `builder/build_gui.py`：选目标系统（Linux / Windows / 双端）、填 authkey 与控制端公钥，
-一键生成「配置已烘焙、对方点击即运行」的离线压缩包。
+| | 离线模式（默认） | 轻量模式 |
+|---|---|---|
+| 包体积 | ~67 MB | ~几十 KB |
+| 目标机要求 | **完全不需要联网**，没 curl/wget 也行 | 需能联网，脚本自动下载官方安装包 |
+| 适合 | 目标机可能断网 / 环境极简 | 目标机能上网，在意传输体积 |
 
-```bat
-cd builder
-python fetch_7zip.py          :: 可选：预取便携 7-Zip 二进制（首次联网）
-双击 运行生成器.bat            :: 或 python build_gui.py   （依赖 PyQt5: pip install PyQt5）
-```
-
-生成出的包内含已写好的 `keys/authkey.local.txt`、`windows/keys/control.pub` 与一键部署脚本，
-**目标机无需联网下载、无需手动填 key，按包内「连接说明.txt」即可运行**。
-
-界面里还有一对 **「内置便携 7-Zip」** 勾选框：勾上则把 `7zz`(Linux) / `7za.exe`(Windows) 一并打进包，
-连解压缩软件都没有的目标机也能自己解开；不勾则自动剔除以省几 MB。
-详见 [builder/README.md](builder/README.md)。
+两种模式下脚本逻辑一致：有预置二进制就用，没有就自动联网获取。
 
 ---
 
@@ -124,11 +132,12 @@ python fetch_7zip.py          :: 可选：预取便携 7-Zip 二进制（首次�
 本仓库**不包含任何真实凭证**：
 
 - `我的连接信息.txt`（含真实 IP / 主机名 / 账号）→ 已 `.gitignore`，仓库只放 `.example` 模板。
-- `linux/keys/authkey.local.txt`（真实 key）→ 已 `.gitignore`，本地可用、远程不传。
-- `linux/assets/` 二进制、`windows/assets/*.msi` → 已 `.gitignore`，通过 Release 或 `stage-tailscale.sh` 获取。
+- `*/keys/authkey.local.txt`（真实 key）→ 已 `.gitignore`，本地可用、远程不传。
+- `linux/assets/` 二进制、`windows/assets/*.msi`、便携 7-Zip → 已 `.gitignore`，通过 Release 或脚本获取。
+- 生成的部署包内含**明文 authkey**，只发给可信目标；对方跑 clean 会清除。
 
 ⚠ **服务器侧仍需手动清理**：Tailscale 账号「设备列表」里这台机器仍会显示。彻底消失需两步（要联网）：
-① 重跑脚本授权后 `clean.sh` / `clean-windows.ps1` 的 logout 让设备转 offline；
+① 重跑脚本授权后 `clean` 的 logout 让设备转 offline；
 ② 到 https://login.tailscale.com/admin/machines 删除该节点。
 
 ---
@@ -138,5 +147,5 @@ python fetch_7zip.py          :: 可选：预取便携 7-Zip 二进制（首次�
 - **Linux 被控端**：无需 root、无需 sshd、无需传统 OpenSSH 组件（用 Tailscale 内置 SSH）。
 - **Windows 被控端**：需管理员权限；依赖系统自带 OpenSSH Server 可选功能（多数镜像可离线启用）。
 - 你自己的控制端电脑（连出到上述被控端）只需装 Tailscale 客户端 + 系统自带 `ssh`，无需本仓库脚本。
-- 目标机需能联网到 Tailscale 控制面（用于 authkey 授权与建立隧道）；二进制本身无需下载。
+- 目标机需能联网到 Tailscale 控制面（用于 authkey 授权与建立隧道）；**二进制本身**在离线模式下无需下载。
 - Linux 用户态模式不修改系统网络栈，本机清洗能做到真正"零残留"；Windows 端卸载服务/功能/公钥后同样干净。
