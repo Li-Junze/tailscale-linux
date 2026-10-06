@@ -50,3 +50,6 @@ __pycache__/
 # 重构期备份
 builder/*.bak*
 *.bak
+builder/.pyqt5-probe.json
+builder/.toolbox*.pid
+builder/_ui_preview/

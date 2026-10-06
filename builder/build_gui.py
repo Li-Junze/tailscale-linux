@@ -740,8 +740,10 @@ if HAS_QT:
                 lines = self._buf.get(tgt)
                 if not lines:
                     continue
-                self._buf[tgt] = []
-                box.appendPlainText("\n".join(lines))
+                # 一次最多落地 300 行: 极端刷屏时也不会一次拼出巨大文本块
+                chunk, rest = lines[:300], lines[300:]
+                self._buf[tgt] = rest
+                box.appendPlainText("\n".join(chunk))
                 sb = box.verticalScrollBar()
                 sb.setValue(sb.maximum())
 
@@ -874,6 +876,8 @@ if HAS_QT:
             self._auto_pick_target()
             if not self._busy:
                 self.lbl_status.setText(f"tailnet 内 {len(self._peers)} 台设备")
+            dbg(f"[peers] ui updated: {len(self._peers)} devices, "
+                f"target={self.current_peer_ip()}")
 
         def _fill_table(self):
             try:

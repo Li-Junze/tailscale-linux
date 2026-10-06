@@ -130,16 +130,60 @@ def _scan(base, depth):
     return None
 
 
+PROBE_CACHE = os.path.join(HERE, ".pyqt5-probe.json")
+
+
+def _probe_cache_read():
+    try:
+        import json
+        with open(PROBE_CACHE, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:      # noqa: BLE001
+        return {}
+
+
+def _probe_cache_write(d):
+    try:
+        import json
+        with open(PROBE_CACHE, "w", encoding="utf-8") as f:
+            json.dump(dict(list(d.items())[-20:]), f)
+    except Exception:      # noqa: BLE001
+        pass
+
+
 def has_pyqt5(exe):
+    """带缓存的探测 —— 每次启动少等约 1 秒。
+
+    缓存键含解释器的 mtime+size, 所以换了 Python 版本会自动重新探测;
+    PyQt5 本身装/卸载不会改 exe 的 mtime, 用 30 天过期兜底。
+    """
+    import time as _t
+    key = None
+    try:
+        st = os.stat(exe)
+        key = f"{os.path.normcase(exe)}|{int(st.st_mtime)}|{st.st_size}"
+        cache = _probe_cache_read()
+        hit = cache.get(key)
+        # ★ 只认「成功」的缓存: 失败不缓存, 免得用户补装 PyQt5 后还被挡 30 天
+        if (isinstance(hit, dict) and hit.get("ok")
+                and _t.time() - hit.get("t", 0) < 30 * 86400):
+            return True
+    except Exception:      # noqa: BLE001
+        cache = {}
     try:
         env = dict(os.environ)
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"):
             env.pop(k, None)
         r = subprocess.run([exe, "-c", "import PyQt5.QtWidgets"],
                            capture_output=True, timeout=25, env=env)
-        return r.returncode == 0
+        ok = r.returncode == 0
     except Exception:      # noqa: BLE001
-        return False
+        ok = False
+    if key and ok:
+        cache[key] = {"ok": True, "t": _t.time()}
+        _probe_cache_write(cache)
+    return ok
 
 
 def to_pythonw(exe):
