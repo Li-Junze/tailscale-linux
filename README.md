@@ -22,8 +22,12 @@
 ① 目标环境   Linux / Windows / 双端
 ② 运行模式   离线（自带二进制，67MB）/ 轻量（不带，几十KB）
 ③ 密钥       贴 authkey；点一下自动生成 SSH 密钥对
-④ 打包选项   格式 / 输出目录 / 要不要内置便携 7-Zip
+④ 打包选项   格式 / 输出目录 / 便携 7-Zip / 要不要带传文件工具
 ```
+
+> 所有选择都会被**记住**（存到 `~/.tailscale_remote/generator_config.json`），
+> 下次打开自动恢复；authkey 需勾「记住」才会明文落盘。
+> ④ 区底部有**实时摘要**，点生成前能核对平台/模式/密钥是否选对。
 
 生成的包**顶层只有 4 个要碰的东西**，其余全部收进 `程序/`：
 
@@ -68,9 +72,17 @@ tailscale-remote/
 │   ├── assets/                #   预置 Tailscale MSI（不入库）
 │   └── keys/                  #   authkey + 控制端公钥临时存放点
 │
+├── tools/                     ★ 点对点文件传输（双向）
+│   ├── p2p.py                 #   核心 CLI: serve / send / fetch
+│   ├── dragdrop-send.bat      #   Windows 拖拽发送入口
+│   ├── receive-files.bat      #   Windows 一键接收入口
+│   ├── 收文件.sh              #   Linux / macOS 一键接收
+│   └── README.md              #   传文件详细说明
+│
 └── builder/                   ★ 配置生成器
     ├── ★运行生成器.bat         #   双击启动（醒目入口）
     ├── build_gui.py           #   图形界面主程序
+    ├── find_python.py         #   帮 bat 找带 PyQt5 的解释器
     ├── fetch_7zip.py          #   拉取官方便携 7-Zip 二进制（可选）
     └── README.md              #   生成器详细说明
 ```
@@ -124,6 +136,36 @@ bash clean.sh -y         # 非交互
 | 适合 | 目标机可能断网 / 环境极简 | 目标机能上网，在意传输体积 |
 
 两种模式下脚本逻辑一致：有预置二进制就用，没有就自动联网获取。
+
+---
+
+## 传文件（双向，零依赖）
+
+建好通道后传文件**不用 scp / rsync / sftp**，只靠 python3 标准库。
+
+```bash
+# 被控端：启动接收（Windows 双击 接收文件.bat / Linux bash 收文件.sh）
+python tools/p2p.py serve --gui
+#   屏幕显示: 100.x.x.x 的 IP + 6 位口令, 收件在 程序/文件传输/inbox/
+
+# 控制端：送文件
+python tools/p2p.py send 100.x.x.x 报告.pdf
+python tools/p2p.py send 100.x.x.x -a 整个目录      # 自动打包 zip
+
+# 控制端：从对方取文件（反向）
+python tools/p2p.py fetch 100.x.x.x -l               # 先列清单
+python tools/p2p.py fetch 100.x.x.x 截图.png
+```
+
+**Windows 拖拽**：把文件/文件夹直接拖到 `dragdrop-send.bat` 图标上，按提示填 IP 和口令。
+
+| 依赖 | 说明 |
+|---|---|
+| 被控端 `serve` | **python3 本体即可**（socket/threading/zipfile 全内置） |
+| `--gui` 弹窗 | +tkinter，**纯可选**；精简 Linux 缺了自动降级命令行，收文件不受影响 |
+
+安全：默认 6 位口令校验、路径越界拒绝、文件名净化、`.part` 临时文件原子改名、同名自动加序号。
+详见 [tools/README.md](tools/README.md)。
 
 ---
 
