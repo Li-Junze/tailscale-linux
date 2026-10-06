@@ -132,23 +132,30 @@ bash clean.sh -y         # 非交互
 
 ---
 
-## 传文件（零新增依赖）
+## 传文件（单向，零新增依赖）
 
-建好通道后传文件**不需要装任何东西** —— 直接用系统自带的 `scp`：
+**首选：工具箱右页（图形界面）** —— 拖文件、点发送、看进度。
+
+底层是 Tailscale 自带的 **Taildrop**，所以被控端**什么都不用装、不用跑脚本、
+甚至不用先建好 SSH 通道**：
 
 ```bash
-# 在你自己的(控制端)电脑上执行, IP 换成被控端屏幕上显示的那个
-scp -r 文件或目录 用户名@100.x.x.x:~/
+# 控制端（你的电脑）
+tailscale file cp 文件...  100.x.x.x:
+
+# 被控端（对方机器）—— 取走文件
+tailscale file get
 ```
 
-- **Linux 被控端**：走 Tailscale 内置 SSH（端口 22，免密、无需 sshd）
-- **Windows 被控端**：走已装好的 OpenSSH Server（公钥免密）
+**备选：scp**（对方已跑过 deploy、SSH 就绪时）
+工具箱右页切到「scp」方式，或命令行：
+```bash
+scp -r 文件或目录 用户名@100.x.x.x:~/      # Linux 走 Tailscale SSH, 免密
+                                             # Windows 走 OpenSSH, 公钥免密
+```
 
-`deploy` 跑完后，屏幕会直接把这条命令打印给你（连文件路径都填好了），
-所以你不需要记任何东西。
-
-> Linux 若提示 `scp: command not found`，装一下客户端即可：
-> `apt install openssh-client` / `yum install openssh-clients` / `apk add openssh-client`
+> Linux 若 `scp: command not found`：`apt install openssh-client`
+> / `yum install openssh-clients` / `apk add openssh-client`
 
 ---
 

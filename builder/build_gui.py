@@ -36,7 +36,7 @@ try:
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QGroupBox, QComboBox, QLineEdit,
         QPlainTextEdit, QPushButton, QFileDialog, QMessageBox, QLabel,
-        QCheckBox, QFrame, QScrollArea,
+        QCheckBox, QFrame, QScrollArea, QButtonGroup,
     )
     from PyQt5.QtCore import Qt, QUrl
     from PyQt5.QtGui import QFont, QDesktopServices
@@ -174,6 +174,7 @@ DEFAULT_CONFIG = {
     "authkey": "",            # 受 remember_auth 开关控制
     "pubkey": "",
     "remember_auth": False,   # authkey 默认【不】记住, 避免明文长期落盘
+    "send_history": [],        # 发送文件的目标 IP 历史
 }
 
 
@@ -567,6 +568,225 @@ def generate(repo_root, linux_on, windows_on, arch, auth, pub,
     return made
 
 
+
+# ============================================================ 发送文件(纯逻辑, 无 UI 依赖)
+WIN_SCP_EXE = r"C://Windows//System32//OpenSSH//scp.exe"
+TS_EXE_PATHS = [
+    r"C://Program Files//Tailscale//tailscale.exe",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    "/usr/local/bin/tailscale",
+    "/usr/bin/tailscale",
+]
+
+
+def _find_ts():
+    for p in TS_EXE_PATHS:
+        if os.path.isfile(p):
+            return p
+    from shutil import which
+    return which("tailscale")
+
+
+def _find_scp():
+    if os.name == "nt" and os.path.isfile(WIN_SCP_EXE):
+        return WIN_SCP_EXE
+    from shutil import which
+    w = which("scp")
+    if w:
+        return w
+    for c in (r"C://Program Files//Git//usr//bin//scp.exe", "/usr/bin/scp"):
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def _human(n):
+    n = float(n)
+    for u in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.1f}{u}"
+        n /= 1024
+    return f"{n:.1f}PB"
+
+
+def _dir_size(path):
+    if os.path.isfile(path):
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return 0
+    total = 0
+    for root, _d, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def _quote_arg(s):
+    return f'"{s}"' if (" " in s or "\t" in s) else s
+
+
+def _zip_dir(d, log=None):
+    """目录打成 zip —— Taildrop 只支持文件, 不支持目录。"""
+    import zipfile
+    d = d.rstrip("/\\")
+    out = os.path.join(os.path.dirname(d), f"{os.path.basename(d)}.zip")
+    n = 0
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for root, _sub, files in os.walk(d):
+            for f in files:
+                fp = os.path.join(root, f)
+                rel = os.path.relpath(fp, os.path.dirname(d))
+                try:
+                    z.write(fp, rel.replace(os.sep, "/"))
+                    n += 1
+                except OSError:
+                    pass
+    if log:
+        log(f"目录已打包: {os.path.basename(out)}  ({n} 个文件)")
+    return out
+
+
+def list_ts_targets():
+    """列出 tailnet 里的设备(排除自己)。"""
+    ts = _find_ts()
+    if not ts:
+        return []
+    try:
+        r = subprocess.run([ts, "status"], capture_output=True, text=True,
+                           timeout=20)
+    except Exception:  # noqa: BLE001
+        return []
+    me = ""
+    try:
+        me = subprocess.run([ts, "status", "--self"], capture_output=True,
+                            text=True, timeout=10).stdout.split()[0]
+    except Exception:  # noqa: BLE001
+        pass
+    out = []
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        ip = parts[0]
+        if not (ip.count(".") == 3 and ip.split(".")[0] == "100"):
+            continue
+        if ip == me:
+            continue
+        osname = ""
+        for pt in parts:
+            if pt in ("windows", "linux", "macOS", "iOS", "android"):
+                osname = pt
+                break
+        out.append({"ip": ip, "name": parts[1], "os": osname,
+                    "offline": "offline" in line.lower()})
+    return out
+
+
+class _SendTask:
+    """一次单向发送: 控制端 -> 被控端。"""
+
+    def __init__(self, targets, peer, method="taildrop", remote_dir="~",
+                 user="", log=None):
+        self.targets = [t for t in targets if os.path.exists(t)]
+        self.peer = (peer or "").strip()
+        self.method = method
+        self.remote_dir = remote_dir or "~"
+        self.user = (user or "").strip()
+        self.log = log or (lambda s: None)
+        self.proc = None
+        self._bundles = []
+        self._cancelled = False
+
+    def build_cmd(self):
+        if self.method == "taildrop":
+            ts = _find_ts()
+            if not ts:
+                raise RuntimeError(
+                    "本机没有 tailscale 客户端。\n"
+                    "  请到 https://tailscale.com/download 安装。")
+            files = []
+            for t in self.targets:
+                if os.path.isdir(t):
+                    b = _zip_dir(t, self.log)
+                    self._bundles.append(b)
+                    files.append(b)
+                else:
+                    files.append(t)
+            argv = [ts, "file", "cp", "--verbose"] + files + [self.peer + ":"]
+            return argv, " ".join(_quote_arg(a) for a in argv)
+
+        scp = _find_scp()
+        if not scp:
+            raise RuntimeError(
+                "本机没有 scp。Windows: 设置 → 可选功能 → 添加 OpenSSH 客户端。")
+        remote = f"{self.user}@{self.peer}" if self.user else self.peer
+        argv = [scp, "-r", "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "ConnectTimeout=15"] + self.targets + \
+               [f"{remote}:{self.remote_dir}"]
+        return argv, " ".join(_quote_arg(a) for a in argv)
+
+    def cancel(self):
+        self._cancelled = True
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def run(self):
+        if not self.targets:
+            return False, "没有可发送的文件"
+        if not self.peer:
+            return False, "请选一个被控端"
+        try:
+            argv, shown = self.build_cmd()
+        except (RuntimeError, OSError) as e:
+            return False, str(e)
+
+        self.log("执行: " + shown)
+        self.log("")
+        try:
+            self.proc = subprocess.Popen(
+                argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                errors="replace", bufsize=1)
+        except Exception as e:  # noqa: BLE001
+            return False, f"启动失败: {e}"
+
+        import time as _t
+        start = _t.time()
+        total = sum(_dir_size(t) for t in self.targets)
+        self.log(f"共 {len(self.targets)} 个目标, 合计 {_human(total)}")
+        self.log("")
+        for line in self.proc.stdout:
+            if self._cancelled:
+                return False, "已取消"
+            line = line.rstrip()
+            if line:
+                self.log("  " + line)
+        rc = self.proc.wait()
+        cost = _t.time() - start
+        for b in self._bundles:          # 清理临时 zip
+            try:
+                os.remove(b)
+            except OSError:
+                pass
+        if rc == 0:
+            self.log("")
+            self.log(f"✅ 发送完成 ({cost:.1f} 秒)")
+            return True, f"发送完成, 用时 {cost:.1f} 秒"
+        self.log("")
+        tail = ("  (scp 模式: 对方需已跑过 deploy)" if self.method == "scp"
+                else "  (确认对方在线: tailscale status 看它的状态)")
+        msg = f"退出码 {rc}。{tail}\n看上方日志里的具体报错。"
+        self.log(f"❌ 失败: {msg}")
+        return False, msg
+
+
 # ============================================================ 图形界面
 # 字号策略: 基准 15px(比常规 UI 大一档), 辅助文字 13px, 标题 21px。
 # 所有尺寸同步放大, 避免"字小 + 控件挤"导致的可读性问题。
@@ -624,6 +844,19 @@ QPlainTextEdit#log {
     background:#0F1724; color:#D8E4F5; border:1px solid #24334A; border-radius:8px;
     font-family:Consolas,monospace; font-size:15px; padding:12px;
 }
+QLabel#tip  { background:#FFF7E6; border:1px solid #F0D9A8; border-radius:8px;
+              padding:10px 12px; color:#8A5A00; font-size:14px; }
+QGroupBox#drop {
+    background:#FBFCFE; border:2px dashed #A9BEDC; border-radius:10px;
+}
+QPushButton#tab {
+    background:#E4EAF4; border:1px solid #C6D0E0; border-radius:8px;
+    padding:10px 20px; color:#2B3A55; font-size:16px;
+}
+QPushButton#tab:hover { background:#D5DFF0; }
+QPushButton#tab:checked {
+    background:#2F6FED; color:#FFFFFF; border-color:#2F6FED;
+}
 QScrollArea { border:none; background:transparent; }
 QScrollBar:vertical { background:#E3E9F2; width:12px; border-radius:6px; }
 QScrollBar::handle:vertical { background:#B4C2D6; border-radius:6px; min-height:40px; }
@@ -645,13 +878,14 @@ if HAS_QT:
     class MainWindow(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle("Tailscale-Remote  离线部署包生成器")
+            self.setWindowTitle("Tailscale-Remote  工具箱")
             self.setStyleSheet(STYLE)
             self.resize(1120, 1080)
             self.setMinimumSize(960, 800)
             app = QApplication.instance()
             if app is not None:
                 app.setFont(QFont("Microsoft YaHei", 13))
+            self.cfg = load_config()    # 配置(记忆/历史) 先加载, UI 里要用
             self._build_ui()
             self._restore_config()      # 恢复上次选择(含记忆的密钥)
             self._scan_existing_key()
@@ -665,6 +899,19 @@ if HAS_QT:
             ev.accept()
 
         # ---------------- UI 构建 ----------------
+        def _mk_page(self, title):
+            """新建一个带滚动区的页签, 返回 (QScrollArea, 内容布局)。"""
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            bd = QWidget()
+            lay = QVBoxLayout(bd)
+            lay.setContentsMargins(16, 14, 16, 14)
+            lay.setSpacing(14)
+            sc.setWidget(bd)
+            self.tabs.addTab(sc, title)
+            return sc, lay
+
         def _build_ui(self):
             outer = QWidget()
             self.setCentralWidget(outer)
@@ -677,9 +924,9 @@ if HAS_QT:
             head.setObjectName("head")
             hl = QVBoxLayout(head)
             hl.setContentsMargins(18, 13, 18, 13)
-            t1 = QLabel("Tailscale-Remote  离线部署包生成器")
+            t1 = QLabel("Tailscale-Remote  工具箱")
             t1.setStyleSheet("font-size:26px;font-weight:bold;color:#12263F;background:transparent;")
-            t2 = QLabel("勾选环境 → 填密钥 → 生成包。对方解压后只看得见 deploy / clean 两个要跑的文件。")
+            t2 = QLabel("左页一键生成部署包（对方解压后只跑 deploy）；右页把文件单向发到对方（对方零配置）。")
             t2.setObjectName("hint")
             hl.addWidget(t1)
             hl.addWidget(t2)
@@ -689,28 +936,67 @@ if HAS_QT:
             wl.addWidget(head)
             root.addWidget(wrap)
 
-            # ---- 滚动区 ----
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-            body = QWidget()
-            self.form = QVBoxLayout(body)
-            self.form.setContentsMargins(16, 12, 16, 12)
-            self.form.setSpacing(12)
-            scroll.setWidget(body)
+            # ---- 两个功能页(用按钮切换) ----
+            _tf = QFont("Microsoft YaHei", 11)
+            _tf.setBold(True)
+            self.tabs = QWidget()          # 占位, 实际靠下面两个按钮切换
+            self.btn_group = QButtonGroup(self)
+            self.btn_group.setExclusive(True)
+            hb = QHBoxLayout()
+            hb.setContentsMargins(16, 0, 16, 0)
+            hb.setSpacing(8)
+            self.btn_tab_gen = QPushButton("  生成部署包  ")
+            self.btn_tab_send = QPushButton("  发送文件到被控端  ")
+            for i, b in enumerate([self.btn_tab_gen, self.btn_tab_send]):
+                b.setCheckable(True)
+                b.setMinimumHeight(46)
+                b.setObjectName("tab")
+                b.setFont(_tf)
+                self.btn_group.addButton(b, i)
+                hb.addWidget(b)
+            hb.addStretch(1)
+            wrap_tab = QWidget()
+            lt = QVBoxLayout(wrap_tab)
+            lt.setContentsMargins(0, 0, 0, 0)
+            lt.addLayout(hb)
+            root.addWidget(wrap_tab)
+            self.btn_tab_gen.setChecked(True)
+
+            # 两个页面容器(各自带滚动区)
+            self.page_gen = QWidget()
+            self.scroll_gen = QScrollArea()
+            self.scroll_gen.setWidgetResizable(True)
+            self.scroll_gen.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.form = QVBoxLayout(self.page_gen)
+            self.form.setContentsMargins(16, 14, 16, 14)
+            self.form.setSpacing(14)
+            self.scroll_gen.setWidget(self.page_gen)
+
+            self.page_send = QWidget()
+            self.scroll_send = QScrollArea()
+            self.scroll_send.setWidgetResizable(True)
+            self.scroll_send.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.form_send = QVBoxLayout(self.page_send)
+            self.form_send.setContentsMargins(16, 14, 16, 14)
+            self.form_send.setSpacing(14)
+            self.scroll_send.setWidget(self.page_send)
+
             wrap2 = QWidget()
             wl2 = QVBoxLayout(wrap2)
-            wl2.setContentsMargins(0, 0, 0, 0)
-            wl2.addWidget(scroll)
+            wl2.setContentsMargins(14, 4, 14, 0)
+            wl2.addWidget(self.scroll_gen)
+            wl2.addWidget(self.scroll_send)
             root.addWidget(wrap2, 1)
+            self.scroll_send.setVisible(False)
+            self.btn_tab_gen.clicked.connect(lambda: self._switch_page(0))
+            self.btn_tab_send.clicked.connect(lambda: self._switch_page(1))
 
+            # 页1 内容
             self._card_target()
             self._card_mode()
             self._card_keys()
             self._card_output()
             self.form.addStretch(1)
-
-            # ---- 日志 ----
             g_log = QGroupBox("运行日志")
             lv = QVBoxLayout(g_log)
             self.txt_log = QPlainTextEdit()
@@ -720,12 +1006,21 @@ if HAS_QT:
             lv.addWidget(self.txt_log)
             self.form.addWidget(g_log)
 
-            # ---- 底部按钮 ----
+            # 页2 内容(发送文件)
+            self._card_send()
+
+            # ---- 底部按钮(随页签切换) ----
             foot = QFrame()
             foot.setObjectName("foot")
             fl = QHBoxLayout(foot)
             fl.setContentsMargins(16, 9, 16, 9)
             fl.setSpacing(10)
+
+            # 页1 按钮组
+            self.wid_gen = QWidget()
+            gl = QHBoxLayout(self.wid_gen)
+            gl.setContentsMargins(0, 0, 0, 0)
+            gl.setSpacing(10)
             self.btn_gen = QPushButton("生成部署包")
             self.btn_gen.setObjectName("primary")
             self.btn_gen.setMinimumHeight(52)
@@ -734,9 +1029,29 @@ if HAS_QT:
             self.btn_open.clicked.connect(self.on_open)
             self.btn_clear = QPushButton("清空日志")
             self.btn_clear.clicked.connect(lambda: self.txt_log.clear())
-            fl.addWidget(self.btn_gen)
-            fl.addWidget(self.btn_open)
-            fl.addWidget(self.btn_clear)
+            gl.addWidget(self.btn_gen)
+            gl.addWidget(self.btn_open)
+            gl.addWidget(self.btn_clear)
+            fl.addWidget(self.wid_gen)
+
+            # 页2 按钮组
+            self.wid_send = QWidget()
+            sl = QHBoxLayout(self.wid_send)
+            sl.setContentsMargins(0, 0, 0, 0)
+            sl.setSpacing(10)
+            self.btn_send = QPushButton("开始发送")
+            self.btn_send.setObjectName("primary")
+            self.btn_send.setMinimumHeight(52)
+            self.btn_send.clicked.connect(self.on_send)
+            self.btn_stop = QPushButton("停止")
+            self.btn_stop.clicked.connect(self.on_stop)
+            self.btn_sendclr = QPushButton("清空列表")
+            self.btn_sendclr.clicked.connect(self.on_send_clear)
+            sl.addWidget(self.btn_send)
+            sl.addWidget(self.btn_stop)
+            sl.addWidget(self.btn_sendclr)
+            fl.addWidget(self.wid_send)
+
             fl.addStretch(1)
             self.lbl_status = _label("")
             fl.addWidget(self.lbl_status)
@@ -745,6 +1060,7 @@ if HAS_QT:
             wl3.setContentsMargins(14, 8, 14, 12)
             wl3.addWidget(foot)
             root.addWidget(wrap3)
+            self._switch_page(0)
 
         def _card_target(self):
             g = QGroupBox("①  目标环境 —— 要连哪台机器？")
@@ -914,6 +1230,268 @@ if HAS_QT:
             self.lbl_summary = _label("", "summary")
             v.addWidget(self.lbl_summary)
             self.form.addWidget(g)
+
+        # =============== 第二页: 发送文件到被控端 ===============
+        def _card_send(self):
+            """单向: 控制端 -> 被控端。被控端零改动(走 Tailscale Taildrop)。"""
+            self.send_files = []
+            self._send_task = None
+
+            # --- ① 发给谁 ---
+            g = QGroupBox("①  发给谁")
+            v = QVBoxLayout(g)
+            v.setSpacing(11)
+            h1 = QHBoxLayout()
+            h1.setSpacing(10)
+            h1.addWidget(_label("被控端"))
+            self.cmb_speer = QComboBox()
+            self.cmb_speer.setMinimumWidth(460)
+            self.cmb_speer.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            self.cmb_speer.setToolTip("从 tailnet 里选; 点右边的刷新")
+            h1.addWidget(self.cmb_speer)
+            b_rf = QPushButton("刷新列表")
+            b_rf.setObjectName("ghost")
+            b_rf.clicked.connect(self.on_refresh_peers)
+            h1.addWidget(b_rf)
+            h1.addStretch(1)
+            v.addLayout(h1)
+
+            h2 = QHBoxLayout()
+            h2.setSpacing(10)
+            h2.addWidget(_label("方式"))
+            self.cmb_smethod = QComboBox()
+            self.cmb_smethod.addItems([
+                "Taildrop（推荐）· 被控端零配置，只需 tailscale file get",
+                "scp · 被控端需已跑 deploy（SSH 已就绪）",
+            ])
+            self.cmb_smethod.setMinimumWidth(430)
+            self.cmb_smethod.currentIndexChanged.connect(self._on_smethod)
+            h2.addWidget(self.cmb_smethod)
+            h2.addStretch(1)
+            v.addLayout(h2)
+
+            # scp 专用
+            self.row_scp = QWidget()
+            rl = QHBoxLayout(self.row_scp)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(10)
+            rl.addWidget(_label("用户名"))
+            self.ed_suser = QLineEdit()
+            self.ed_suser.setPlaceholderText("被控端上的用户名")
+            self.ed_suser.setFixedWidth(190)
+            rl.addWidget(self.ed_suser)
+            rl.addWidget(_label("落到"))
+            self.ed_sdir = QLineEdit("~")
+            self.ed_sdir.setFixedWidth(180)
+            rl.addWidget(self.ed_sdir)
+            rl.addStretch(1)
+            v.addWidget(self.row_scp)
+
+            self.lbl_stip = _label("", "tip")
+            v.addWidget(self.lbl_stip)
+            self.form_send.addWidget(g)
+
+            # --- ② 发什么 ---
+            g2 = QGroupBox("②  发什么 —— 把文件/文件夹拖进来")
+            v2 = QVBoxLayout(g2)
+            v2.setSpacing(11)
+            self.drop = QGroupBox("")
+            self.drop.setObjectName("drop")
+            self.drop.setAcceptDrops(True)
+            dv = QVBoxLayout(self.drop)
+            self.lbl_sfiles = _label("把文件或文件夹拖到这里", "hint")
+            self.lbl_sfiles.setAlignment(Qt.AlignCenter)
+            dv.addWidget(self.lbl_sfiles)
+            hh = QHBoxLayout()
+            hh.addStretch(1)
+            b1 = QPushButton("选择文件…")
+            b1.setObjectName("ghost")
+            b1.clicked.connect(self.on_spick)
+            hh.addWidget(b1)
+            b2 = QPushButton("选择文件夹…")
+            b2.setObjectName("ghost")
+            b2.clicked.connect(self.on_spick_dir)
+            hh.addWidget(b2)
+            hh.addStretch(1)
+            dv.addLayout(hh)
+            v2.addWidget(self.drop)
+            self.lbl_ssum = _label("", "sum")
+            v2.addWidget(self.lbl_ssum)
+            self.form_send.addWidget(g2)
+
+            # --- ③ 日志 ---
+            g3 = QGroupBox("③  传输日志")
+            v3 = QVBoxLayout(g3)
+            self.txt_slog = QPlainTextEdit()
+            self.txt_slog.setObjectName("log")
+            self.txt_slog.setReadOnly(True)
+            self.txt_slog.setMinimumHeight(190)
+            v3.addWidget(self.txt_slog)
+            self.form_send.addWidget(g3)
+            self.form_send.addStretch(1)
+            self._on_smethod()
+
+        # ---------- 页面切换 ----------
+        def _switch_page(self, idx):
+            on_gen = (idx == 0)
+            self.scroll_gen.setVisible(on_gen)
+            self.scroll_send.setVisible(not on_gen)
+            self.wid_gen.setVisible(on_gen)
+            self.wid_send.setVisible(not on_gen)
+            self.lbl_status.setText("")
+
+        # ---------- 拖拽(两个页共用一套) ----------
+        def dragEnterEvent(self, ev):
+            if ev.mimeData().hasUrls():
+                ev.acceptProposedAction()
+
+        def dragMoveEvent(self, ev):
+            if ev.mimeData().hasUrls():
+                ev.acceptProposedAction()
+
+        def dropEvent(self, ev):
+            paths = [u.toLocalFile() for u in ev.mimeData().urls()]
+            self.add_send_files([p for p in paths if os.path.exists(p)])
+            ev.acceptProposedAction()
+
+        def on_spick(self):
+            fs, _ = QFileDialog.getOpenFileNames(self, "选择要发送的文件")
+            if fs:
+                self.add_send_files(fs)
+
+        def on_spick_dir(self):
+            d = QFileDialog.getExistingDirectory(self, "选择要发送的文件夹")
+            if d:
+                self.add_send_files([d])
+
+        def add_send_files(self, paths):
+            for p in paths:
+                if p not in self.send_files:
+                    self.send_files.append(p)
+            self._update_ssum()
+
+        def on_send_clear(self):
+            self.send_files = []
+            self._update_ssum()
+
+        def _update_ssum(self):
+            if not hasattr(self, "lbl_ssum"):
+                return
+            if not self.send_files:
+                self.lbl_sfiles.setText("把文件或文件夹拖到这里")
+                self.lbl_ssum.setText("还没选文件")
+                return
+            total = sum(_dir_size(f) for f in self.send_files)
+            names = [os.path.basename(f.rstrip("/\\")) for f in self.send_files[:4]]
+            more = f" 等 {len(self.send_files)} 个" if len(self.send_files) > 4 else ""
+            self.lbl_sfiles.setText("、".join(names) + more)
+            where = ("对方用 tailscale file get 取走"
+                     if self.cmb_smethod.currentIndex() == 0
+                     else f"落到对方 {self.ed_sdir.text() or '~'}")
+            self.lbl_ssum.setText(
+                f"共 {len(self.send_files)} 个目标, 合计 {_human(total)}  →  {where}")
+
+        def _on_smethod(self):
+            is_scp = self.cmb_smethod.currentIndex() == 1
+            self.row_scp.setVisible(is_scp)
+            self.lbl_stip.setText(
+                "对方机器上执行这一句就能取走:   tailscale file get"
+                if not is_scp else
+                "对方需已跑过 deploy(SSH 就绪)。Linux 走 Tailscale SSH 免密, "
+                "Windows 走公钥免密。")
+            self._update_ssum()
+
+        # ---------- 目标列表 ----------
+        def on_refresh_peers(self):
+            keep = self.cmb_speer.currentText()
+            self.cmb_speer.blockSignals(True)
+            self.cmb_speer.clear()
+            peers = list_ts_targets()
+            for pr in peers:
+                tag = "（离线）" if pr["offline"] else ""
+                osname = ("· " + pr["os"]) if pr["os"] else ""
+                self.cmb_speer.addItem(
+                    f"{pr['ip']}  {pr['name']}{osname}{tag}", pr)
+            for h in self.cfg.get("send_history", []):
+                if h.get("ip") and not any(x["ip"] == h["ip"] for x in peers):
+                    self.cmb_speer.addItem(f"{h['ip']}   （历史）", h)
+            if not peers and not self.cfg.get("send_history"):
+                self.cmb_speer.addItem("", None)
+            self.cmb_speer.blockSignals(False)
+            if keep:
+                for i in range(self.cmb_speer.count()):
+                    if keep in (self.cmb_speer.itemText(i) or ""):
+                        self.cmb_speer.setCurrentIndex(i)
+                        break
+            self.lbl_status.setText(f"找到 {len(peers)} 台设备")
+
+        def current_peer_ip(self):
+            d = self.cmb_speer.currentData()
+            if isinstance(d, dict):
+                return d.get("ip", "")
+            if isinstance(d, str):
+                return d
+            return (self.cmb_speer.currentText() or "").split()[0].strip()
+
+        # ---------- 发送 ----------
+        def on_send(self):
+            ip = self.current_peer_ip()
+            if not ip:
+                QMessageBox.warning(self, "没选被控端",
+                                    "点『刷新列表』选一台设备。\n"
+                                    "若对方不在列表里, 可直接在 IP 框里手输 100.x.x.x")
+                return
+            if not self.send_files:
+                QMessageBox.warning(self, "没有文件", "请先把要发的文件拖进来")
+                return
+            method = "scp" if self.cmb_smethod.currentIndex() == 1 else "taildrop"
+            hist = [h for h in self.cfg.get("send_history", [])
+                    if h.get("ip") != ip]
+            d = self.cmb_speer.currentData()
+            hist.insert(0, {"ip": ip, "name": d.get("name", "") if isinstance(d, dict) else ""})
+            self.cfg["send_history"] = hist[:12]
+            save_config(self.cfg)
+
+            self.txt_slog.clear()
+            self._slog(f"目标: {ip}")
+            self._slog(f"方式: {'scp' if method == 'scp' else 'Taildrop'}")
+            self._slog("")
+            self.btn_send.setEnabled(False)
+            self.btn_stop.setEnabled(True)
+            self.lbl_status.setText("发送中…")
+
+            import threading
+            t = _SendTask(self.send_files, ip, method,
+                          remote_dir=self.ed_sdir.text() or "~",
+                          user=self.ed_suser.text().strip(),
+                          log=self._slog)
+            self._send_task = t
+            threading.Thread(target=self._send_worker, args=(t,),
+                             daemon=True).start()
+
+        def _send_worker(self, t):
+            ok, msg = t.run()
+            self._send_done(ok, msg)
+
+        def _send_done(self, ok, msg):
+            def ui():
+                self.btn_send.setEnabled(True)
+                self.btn_stop.setEnabled(False)
+                self.lbl_status.setText(msg)
+                if ok:
+                    extra = ("\n\n让对方在他的机器上执行:  tailscale file get"
+                             if self.cmb_smethod.currentIndex() == 0 else "")
+                    QMessageBox.information(self, "发送完成", msg + extra)
+            QApplication.instance().processEvents()
+            ui()
+
+        def on_stop(self):
+            if self._send_task:
+                self._send_task.cancel()
+            self.lbl_status.setText("已取消")
+
+        def _slog(self, s):
+            self.txt_slog.appendPlainText(s)
 
         # ---------------- 状态同步 ----------------
         def _sel_platform(self):
