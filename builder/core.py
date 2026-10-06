@@ -24,6 +24,7 @@ build_gui.py —— Tailscale-Remote 配置生成器
 """
 import os
 import re
+import time
 import sys
 import json
 import shutil
@@ -1022,6 +1023,81 @@ def _find_ts():
             return p
     from shutil import which
     return which("tailscale")
+
+
+# ------------------------------------------------------------ Tailscale 自愈
+# ★ 用户最常遇到的一类"工具没反应"：tailscaled 服务在跑，但托盘程序
+#   (tailscale-ipn.exe) 没运行 —— BackendState 卡在 NoState，一个 100.x
+#   地址都没有，于是设备列表一片空白、发文件也发不出去。
+#   这里做自动恢复，用户什么都不用管。
+TS_IPN_PATHS = [
+    r"C://Program Files//Tailscale//tailscale-ipn.exe",
+]
+
+
+def _no_window():
+    if os.name == "nt":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return 0
+
+
+def ts_backend_state():
+    """取 tailscaled 的 BackendState：Running / NoState / Stopped / NeedsLogin ..."""
+    ts = _find_ts()
+    if not ts:
+        return ""
+    try:
+        r = subprocess.run([ts, "status", "--json"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=15, creationflags=_no_window())
+        if r.returncode != 0:
+            return ""
+        return str((json.loads(r.stdout or "{}") or {}).get("BackendState") or "")
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def ensure_tailscale_up(log=None, wait=10):
+    """确保本机 Tailscale 处于 Running（可用）。返回 (ok, msg)。
+
+    恢复手段：把 Tailscale 托盘程序拉起来 —— 它会自动用已保存的登录态重连。
+    这比让用户自己去点托盘图标省事得多。
+    """
+    st = ts_backend_state()
+    if st == "Running":
+        return True, "Tailscale 正常"
+    ts = _find_ts()
+    if not ts:
+        return False, "没找到 tailscale（本机未安装？）"
+    if log:
+        log(f"  [!] Tailscale 当前状态: {st or '未知'} —— 正在自动恢复...")
+
+    ipn = next((p for p in TS_IPN_PATHS if os.path.isfile(p)), None)
+    if ipn:
+        try:
+            subprocess.Popen([ipn], close_fds=True,
+                             creationflags=(_no_window()
+                                            | getattr(subprocess, "DETACHED_PROCESS", 0)))
+            if log:
+                log("  已启动 Tailscale 托盘程序，等它把连接拉起来…")
+        except Exception as e:                               # noqa: BLE001
+            if log:
+                log(f"  [!] 启动托盘程序失败: {e}")
+    try:
+        # 顺带戳一下 up（已登录时是幂等的，只在需要时生效）
+        subprocess.run([ts, "up"], capture_output=True, timeout=6,
+                       creationflags=_no_window())
+    except Exception:                                        # noqa: BLE001
+        pass
+
+    for _ in range(max(1, int(wait))):
+        time.sleep(1)
+        if ts_backend_state() == "Running":
+            if log:
+                log("  [OK] Tailscale 已恢复，设备列表可用。")
+            return True, "已恢复"
+    return False, (f"仍处于 {ts_backend_state() or '未知'} 状态"
+                   "（可能需要手动打开 Tailscale 登录一次）")
 
 
 def _find_scp():

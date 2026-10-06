@@ -624,7 +624,8 @@ if HAS_QT:
             L = self.form_send
 
             # ① 发给谁
-            c, v = self._card(L, "①  发给谁", "从 tailnet 里挑一台，双击表格行即选中")
+            c, v = self._card(L, "①  发给谁",
+                              "从 tailnet 里挑一台；单击选中，双击 IP 即复制")
             h = QHBoxLayout()
             h.setSpacing(10)
             h.addWidget(_lbl("被控端", "field", False))
@@ -670,7 +671,8 @@ if HAS_QT:
             v.addWidget(self.lbl_tip)
 
             self.tbl = QTableWidget(0, 4)
-            self.tbl.setHorizontalHeaderLabels(["IP（双击复制并选中）", "名称", "系统", "状态"])
+            self.tbl.setHorizontalHeaderLabels(["IP", "名称", "系统", "状态"])
+            self.tbl.setToolTip("双击某行 = 复制它的 IP；单击 = 设为发送目标")
             self.tbl.verticalHeader().setVisible(False)
             self.tbl.setSelectionBehavior(QAbstractItemView.SelectRows)
             self.tbl.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -724,9 +726,10 @@ if HAS_QT:
             b_del.clicked.connect(self.on_delete_peer)
             h.addWidget(b_del)
             h.addStretch(1)
-            self.lbl_manage = _lbl("", "hint", False)
-            h.addWidget(self.lbl_manage)
             v.addLayout(h)
+            # 提示单独占一行 —— 塞在按钮行末尾会被挤断
+            self.lbl_manage = _lbl("", "hint")
+            v.addWidget(self.lbl_manage)
 
             # ② 发什么
             c, v = self._card(L, "②  发什么", "拖进来，或用按钮选择")
@@ -899,6 +902,17 @@ if HAS_QT:
                 except BaseException:                          # noqa: BLE001
                     dbg_exc("ts_snapshot")
                     peers, my = [], []
+                # ★ 一台设备都拿不到: 最常见根因是 Tailscale 托盘进程没跑,
+                #   服务卡在 NoState。自动把它拉起来再试一次(用户无需干预)。
+                if not peers and not my:
+                    try:
+                        ok, _msg = ensure_tailscale_up(
+                            log=lambda s: self.log_sig.emit("send", s))
+                        if ok:
+                            invalidate_peer_cache()
+                            peers, my = ts_snapshot(ttl=0)
+                    except BaseException:                      # noqa: BLE001
+                        dbg_exc("ensure_tailscale_up")
                 try:
                     self.peers_ready.emit(peers or [], my or [])
                 except BaseException:                          # noqa: BLE001
@@ -1042,22 +1056,29 @@ if HAS_QT:
                 return None
 
         def _fill_conn_cmd(self, ip=None, name=""):
-            """选中设备后自动把连接命令填进那个绿框（用户名已知才填）。"""
+            """选中设备后自动填连接命令：用户名已知就填全，未知就给明确引导。"""
             if ip is None:
                 pr = self._sel_row_peer() or {}
                 ip = pr.get("ip") or self.current_peer_ip()
                 name = pr.get("name") or name
             ip = (ip or "").strip()
-            if not ip or ip in self._my_ips:
+            if not ip:
+                return
+            if ip in self._my_ips:
+                self.ed_conn.clear()
+                self.ed_conn.setPlaceholderText("这是本机，换一台设备")
+                self.lbl_manage.setText(f"{name or ip}：这是你自己这台电脑")
                 return
             u = self._known_user(ip)
             if u:
                 self.ed_conn.setText(f"ssh {u}@{ip}")
-                self.lbl_manage.setText(f"{name or ip}：用户名 {u} 已记住，可直接连")
+                self.lbl_manage.setText(f"{name or ip}：用户名 {u} 已记住，直接点右边绿色按钮就能连")
             else:
+                self.ed_conn.clear()
                 self.ed_conn.setPlaceholderText(
-                    "不知道对方用户名 —— 把对方发给你的那一行粘进来即可")
-                self.lbl_manage.setText(f"{name or ip}：还不知道用户名")
+                    f"把对方发给你的那一行粘到这里（形如 ssh 用户名@{ip}）")
+                self.lbl_manage.setText(
+                    f"{name or ip}：还不知道用户名 —— 点『一键 SSH 连接』输一次就永久记住")
 
         def on_copy_cmd(self):
             t = (self.ed_conn.text() or "").strip()
