@@ -35,6 +35,12 @@ builder/_build/
 builder/_verify/
 builder/_v_*/
 
+# 运行时日志与哨兵(不入库)
+builder/debug.log
+builder/*.log
+builder/.toolbox-alive
+启动失败.log
+
 # Python 缓存
 __pycache__/
 *.pyc
