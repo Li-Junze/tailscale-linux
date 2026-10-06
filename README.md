@@ -30,15 +30,19 @@ tailscale-remote/
 │   ├── assets/                #   预置 tailscale / tailscaled（见 README，不入库）
 │   └── keys/                  #   ★ authkey 临时存放点（authkey.local.txt 不入库）
 │
-└── windows/                   # ★ Windows 被控端（离线部署）
-    ├── connect-windows.bat    #   入口：自动提权并以管理员运行 .ps1
-    ├── connect-windows.ps1    #   部署主逻辑（装 Tailscale / 入网 / 开 OpenSSH / 部署公钥 / 自启）
-    ├── clean-windows.bat      #   清洗入口（管理员）
-    ├── clean-windows.ps1      #   清洗逻辑
-    ├── extract.bat            #   解压助手（解 .tar.gz）
-    ├── README.md              #   Windows 详细说明
-    ├── assets/                #   预置 Tailscale MSI（见 README，不入库）
-    └── keys/                  #   authkey + 控制端公钥临时存放点
+├── windows/                   # ★ Windows 被控端（离线部署）
+│   ├── connect-windows.bat    #   入口：自动提权并以管理员运行 .ps1
+│   ├── connect-windows.ps1    #   部署主逻辑（装 Tailscale / 入网 / 开 OpenSSH / 部署公钥 / 自启）
+│   ├── clean-windows.bat      #   清洗入口（管理员）
+│   ├── clean-windows.ps1      #   清洗逻辑
+│   ├── extract.bat            #   解压助手（解 .tar.gz）
+│   ├── README.md              #   Windows 详细说明
+│   ├── assets/                #   预置 Tailscale MSI（见 README，不入库）
+│   └── keys/                  #   authkey + 控制端公钥临时存放点
+│
+└── builder/                   # 配置生成器（PyQt5 可视化一键打包，见 builder/README.md）
+    ├── build_gui.py           #   图形界面主程序
+    └── 运行生成器.bat         #   双击启动
 ```
 
 > 两个平台完全平级、互不嵌套。`linux/` 里只放 Linux 相关文件，`windows/` 里只放 Windows 相关文件，
@@ -92,6 +96,26 @@ cd tailscale-remote\windows
 cd tailscale-remote/linux && bash clean.sh        # 或 bash clean.sh -y 非交互
 # Windows：右键 clean-windows.bat → 以管理员身份运行
 ```
+
+---
+
+## 配置生成器（可视化一键打包）
+
+不想手动拼包？仓库自带一个**本地图形界面** `builder/build_gui.py`：选目标系统（Linux / Windows / 双端）、填 authkey 与控制端公钥，
+一键生成「配置已烘焙、对方点击即运行」的离线压缩包。
+
+```bat
+cd builder
+python fetch_7zip.py          :: 可选：预取便携 7-Zip 二进制（首次联网）
+双击 运行生成器.bat            :: 或 python build_gui.py   （依赖 PyQt5: pip install PyQt5）
+```
+
+生成出的包内含已写好的 `keys/authkey.local.txt`、`windows/keys/control.pub` 与一键部署脚本，
+**目标机无需联网下载、无需手动填 key，按包内「连接说明.txt」即可运行**。
+
+界面里还有一对 **「内置便携 7-Zip」** 勾选框：勾上则把 `7zz`(Linux) / `7za.exe`(Windows) 一并打进包，
+连解压缩软件都没有的目标机也能自己解开；不勾则自动剔除以省几 MB。
+详见 [builder/README.md](builder/README.md)。
 
 ---
 
