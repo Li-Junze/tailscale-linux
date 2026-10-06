@@ -18,7 +18,7 @@ python build_gui.py
 
 | 方式 | 文件 | 背后有黑框吗 |
 |---|---|---|
-| **★推荐** | 双击 `启动工具箱.vbs` | **完全没有** |
+| **★推荐** | 双击 `Start-Toolbox.vbs` | **完全没有** |
 | 带控制台（能看到报错） | 双击 `★运行生成器.bat` | 有（可关掉窗口但会带走程序） |
 | 命令行 | `python build_gui.py` | 取决于你怎么起 |
 
@@ -28,16 +28,44 @@ python build_gui.py
 方式关掉那个黑窗口会连带把 GUI 一起杀掉** —— 这正是之前"发个文件程序就退出"
 的根源之一。
 
-`启动工具箱.vbs` 用 `pythonw.exe`（Python 自带的无控制台版解释器）启动 GUI，
-所以背后**一个黑框都不出现**。它还会：
+启动链路分三层，每层只干一件事：
 
-1. 挨个找带 PyQt5 的 `pythonw.exe`（`C://Python314` → `Python313` → 用户级 → conda）
-2. 找不到时弹窗告诉你装什么，而不是静默闪退
-3. 用**哨兵文件**判断 GUI 是否真的起来了：启动前放 `.toolbox-alive`，
-   `build_gui.py` 起来后会删掉它；4 秒后还在 = 启动失败 → 写 `启动失败.log` + 弹窗
+```
+Start-Toolbox.vbs   纯 ASCII。找 pythonw.exe, 然后 Run(..., 0) 调 launch.py
+      ↓
+launch.py           UTF-8 Python。定位项目 / 校验 PyQt5 / 放哨兵 /
+      ↓            启动 GUI / 校验哨兵 / 失败弹窗
+build_gui.py        图形界面本体
+```
 
-> 静默启动拿不到 stderr，所以必须有这套哨兵机制，否则失败时你只会看到
-> "双击了但什么都没发生"。
+### ★ 为什么 VBS 必须纯 ASCII
+
+VBScript 按**系统 ANSI 码页**读源码。你的项目在 WPS 云盘的路径里有中文
+（`WPS企业云盘/清华大学/...`），如果直接写进 VBS 字符串字面量，会被误解码
+成乱码 → `FileExists` 恒为假 → 报"找不到文件"。
+
+所以：**中文路径一律放在 UTF-8 的 `launch.py` 里**，VBS 只碰纯 ASCII 路径。
+`launch.py` 还会在已知位置都找不到时，**递归扫描 `C://Users//39969//WPSDrive`
+（深度 7 层）**去找含 `builder\build_gui.py` 的目录 —— 也就是你把整个项目
+挪到云盘任何位置都能用。
+
+### 失败反馈：哨兵文件
+
+静默启动（pythonw）拿不到 stderr，失败时你只会看到"双击了但什么都没发生"。
+所以：启动前放 `.toolbox-alive`，`build_gui.py` 起来后会删掉它；
+5 秒后还在 = 启动失败 → 写 `toolbox-launch-failed.log` + 弹窗告诉你装什么。
+
+### 诊断命令
+
+```bash
+python builder/launch.py --probe     # 只打印定位结果, 不启动 GUI
+```
+
+输出示例：
+```
+project : C://Users//39969//WPSDrive//...//P2P//tailscale-remote
+pythonw : C:/Python314/pythonw.exe
+```
 
 ## 界面说明（两页）
 

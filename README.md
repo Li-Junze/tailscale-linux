@@ -105,7 +105,8 @@ tailscale-remote/
 │   └── keys/                  #   authkey + 控制端公钥临时存放点
 │
 └── builder/                   ★ 工具箱（生成器 + 单向传文件）
-    ├── 启动工具箱.vbs           #   ★双击启动 —— 静默无黑框（推荐）
+    ├── Start-Toolbox.vbs       #   ★双击启动 —— 静默无黑框（推荐）
+    ├── launch.py               #   启动器核心（定位项目/校验/失败弹窗）
     ├── ★运行生成器.bat         #   双击启动 —— 带控制台（能看报错）
     ├── build_gui.py           #   主程序（两页：生成部署包 / 发送文件）
     ├── find_python.py         #   帮启动器找带 PyQt5 的解释器（含 pythonw）
@@ -113,8 +114,9 @@ tailscale-remote/
     └── README.md              #   工具箱详细说明
 ```
 
-> 运行时会在 `builder/` 下产生 `debug.log`（调试日志）与 `.toolbox-alive`
-> （启动哨兵），两者都已在 `.gitignore` 里。
+> 运行时会在 `builder/` 下产生 `debug.log`（调试日志）、
+> `toolbox-launch-failed.log`（启动失败原因）与 `.toolbox-alive`（启动哨兵），
+> 三者都已在 `.gitignore` 里。
 
 > 两个被控端目录完全平级、互不嵌套；生成器会把它们收进目标包的 `程序/` 下，
 > 顶层只留醒目入口与文档。
