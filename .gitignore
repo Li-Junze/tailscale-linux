@@ -39,7 +39,9 @@ builder/_v_*/
 builder/debug.log
 builder/*.log
 builder/.toolbox-alive
+builder/toolbox-launch-failed.log
 启动失败.log
+toolbox-launch-failed.log
 
 # Python 缓存
 __pycache__/
