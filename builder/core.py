@@ -103,12 +103,15 @@ def make_targz(pkg_dir, out_dir, pkg_name, log=print):
 def make_zip(pkg_dir, out_dir, pkg_name, log=print):
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, pkg_name + ".zip")
+    # ★ 包里也套一层顶层目录(与 tar.gz 一致): 这样"解压到当前文件夹"不会把
+    #   一堆文件撒得到处都是, 收件人永远得到一个干净的同名文件夹。
+    top = os.path.basename(pkg_dir)
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
         for root, _dirs, files in os.walk(pkg_dir):
             for f in files:
                 fp = os.path.join(root, f)
                 rel = os.path.relpath(fp, pkg_dir).replace(os.sep, "/")
-                zi = zipfile.ZipInfo(rel)
+                zi = zipfile.ZipInfo(top + "/" + rel)
                 base = os.path.basename(f)
                 ext = os.path.splitext(base)[1].lower()
                 is_exec = ext in (".sh", ".exe", ".bat", ".py") or base in (
@@ -351,31 +354,175 @@ cd "$HERE/程序/linux" || { echo "[X] 找不到 程序/linux/, 包不完整。"
 exec bash clean.sh "$@"
 """
 
+# ★★ 编码铁律（血泪教训, 别改回去）★★
+#  cmd.exe 用**系统 OEM 码页**（简体中文 = 936/GBK）解码 .bat 的每一行。
+#  所以含 UTF-8 中文的 .bat 会让路径字符串变乱码 -> `if not exist` 永远判 fail,
+#  现象是"文件明明在, 却报 找不到/包不完整"然后退出（真机已复现）。
+#  另外 LF 换行会让 cmd 的括号块解析碎裂。
+#
+#  因此这里的 bat 遵守三条:
+#    1) 逻辑与路径**全部 ASCII**; 中文只允许出现在 echo 的提示文字里;
+#    2) 查找"程序"目录一律用 `for /d` 通配, 不写字面中文路径
+#       —— 顺带免疫"解压后中文目录名乱码"的问题;
+#    3) 落盘时统一转成 GBK + CRLF（见 write_root_files / normalize_tree）。
+#  提权不再在 bat 里拼三层引号, 交给 ps1 自己 UAC 重启自己。
 DEPLOY_BAT = """@echo off
 REM ============================================================
-REM  deploy.bat —— 【只需右键"以管理员身份运行"这个】一键部署
-REM  配套:  clean.bat  (用完清洗)
+REM  deploy.bat -- 一键部署  (右键 -> 以管理员身份运行)
+REM  This file is ASCII-only on purpose: cmd.exe decodes .bat with the
+REM  OEM code page, so non-ASCII bytes in the *logic* would break it.
 REM ============================================================
-cd /d "%~dp0"
-if not exist "程序\\windows\\connect-windows.ps1" (
-  echo [X] 找不到 程序\\windows\\connect-windows.ps1 -- 包不完整。
-  pause & exit /b 1
+chcp 936 >nul 2>nul
+setlocal enableextensions
+cd /d "%~dp0" 2>nul
+set "PS1="
+for /d %%D in ("%~dp0*") do if exist "%%~fD\\windows\\connect-windows.ps1" set "PS1=%%~fD\\windows\\connect-windows.ps1"
+if not defined PS1 if exist "%~dp0windows\\connect-windows.ps1" set "PS1=%~dp0windows\\connect-windows.ps1"
+if not defined PS1 (
+  echo.
+  echo [X] 包不完整: 找不到 程序\\windows\\connect-windows.ps1
+  echo     请把整个文件夹一起解压后再运行（不要只拷 deploy.bat）。
+  echo.
+  pause
+  exit /b 1
 )
-powershell -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"%CD%\\程序\\windows\\connect-windows.ps1\"'"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
 """
 
 CLEAN_BAT = """@echo off
 REM ============================================================
-REM  clean.bat -- 【用完右键"以管理员身份运行"这个】一键清洗
+REM  clean.bat -- 一键清洗  (右键 -> 以管理员身份运行)
 REM  会删除: Tailscale / OpenSSH Server / 公钥 / 密钥 / 状态
+REM  ASCII-only on purpose (see deploy.bat).
 REM ============================================================
-cd /d "%~dp0"
-if not exist "程序\\windows\\clean-windows.ps1" (
-  echo [X] 找不到 程序\\windows\\clean-windows.ps1 -- 包不完整。
-  pause & exit /b 1
+chcp 936 >nul 2>nul
+setlocal enableextensions
+cd /d "%~dp0" 2>nul
+set "PS1="
+for /d %%D in ("%~dp0*") do if exist "%%~fD\\windows\\clean-windows.ps1" set "PS1=%%~fD\\windows\\clean-windows.ps1"
+if not defined PS1 if exist "%~dp0windows\\clean-windows.ps1" set "PS1=%~dp0windows\\clean-windows.ps1"
+if not defined PS1 (
+  echo.
+  echo [X] 包不完整: 找不到 程序\\windows\\clean-windows.ps1
+  echo     请把整个文件夹一起解压后再运行（不要只拷 clean.bat）。
+  echo.
+  pause
+  exit /b 1
 )
-powershell -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"%CD%\\程序\\windows\\clean-windows.ps1\"'"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
 """
+
+
+# ------------------------------------------------------------ 编码/换行归一化
+def _read_any(path):
+    """按 utf-8-sig -> gbk -> latin-1 依次尝试解码, 换行统一成 \\n。"""
+    raw = open(path, "rb").read()
+    for enc in ("utf-8-sig", "gbk", "latin-1"):
+        try:
+            s = raw.decode(enc)
+            return s.replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("latin-1").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _write_enc(path, text, enc, newline):
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if newline != "\n":
+        text = text.replace("\n", newline)
+    if enc == "utf-8-bom":
+        data = b"\xef\xbb\xbf" + text.encode("utf-8")
+    else:
+        data = text.encode(enc)
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def normalize_tree(root, plat, log=None):
+    """把复制进来的脚本转成"目标机能正确读"的编码与换行。
+
+    Windows: .bat -> GBK + CRLF (cmd 按 OEM 码页读; LF 会让括号块碎裂)
+             .ps1 -> UTF-8 BOM + CRLF (PS 5.1 对无 BOM 文件按 ANSI 读, 中文会乱)
+             .txt -> GBK (双击用记事本看, 中文正常)
+    Linux  : .sh  -> UTF-8 + LF  (绝不能有 CR, 否则 shebang 报 bad interpreter)
+    """
+    fixed = []
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in files:
+            fp = os.path.join(dirpath, fn)
+            ext = os.path.splitext(fn)[1].lower()
+            try:
+                if ext == ".bat":
+                    _write_enc(fp, _read_any(fp), "gbk", "\r\n")
+                    fixed.append((".bat->GBK/CRLF", os.path.relpath(fp, root)))
+                elif ext == ".ps1":
+                    _write_enc(fp, _read_any(fp), "utf-8-bom", "\r\n")
+                    fixed.append((".ps1->UTF8-BOM/CRLF", os.path.relpath(fp, root)))
+                elif ext == ".sh":
+                    _write_enc(fp, _read_any(fp), "utf-8", "\n")
+                    os.chmod(fp, 0o755)
+                elif ext == ".txt" and plat == "windows":
+                    _write_enc(fp, _read_any(fp), "gbk", "\r\n")
+                    fixed.append((".txt->GBK/CRLF", os.path.relpath(fp, root)))
+            except Exception as e:  # noqa: BLE001
+                if log:
+                    log(f"  [!] 编码归一化失败 {fn}: {e}")
+    if log and fixed:
+        log(f"  [OK] 编码归一化 {len(fixed)} 个文件 "
+            f"({', '.join(sorted({t for t, _ in fixed}))})")
+    return fixed
+
+
+def verify_package(pkg_dir, log=print):
+    """自检: 出包前确认每个脚本都是目标机能读的形态。返回问题列表。"""
+    problems = []
+    for dirpath, _dirs, files in os.walk(pkg_dir):
+        for fn in files:
+            fp = os.path.join(dirpath, fn)
+            rel = os.path.relpath(fp, pkg_dir)
+            ext = os.path.splitext(fn)[1].lower()
+            if ext not in (".bat", ".ps1", ".sh"):
+                continue          # 二进制/文档不在此检查范围
+            raw = open(fp, "rb").read()
+            if ext == ".bat":
+                if raw.startswith(b"\xef\xbb\xbf"):
+                    problems.append(f"{rel}: .bat 带 BOM, cmd 会报错")
+                try:
+                    raw.decode("gbk")
+                except UnicodeDecodeError:
+                    problems.append(f"{rel}: .bat 不是合法 GBK")
+                if b"\n" in raw.replace(b"\r\n", b""):
+                    problems.append(f"{rel}: .bat 含裸 LF, 会导致括号块碎裂")
+                # 逻辑行(非 echo/REM)必须纯 ASCII, 否则路径匹配会失败
+                for i, ln in enumerate(raw.split(b"\r\n"), 1):
+                    s = ln.strip()
+                    low = s.lower()
+                    is_echo = low.startswith(b"echo")
+                    is_rem = low.startswith(b"rem")
+                    if is_rem:
+                        continue
+                    if is_echo:
+                        # ★ echo 文本里出现 ASCII 半角括号时, 若该行在 if(...) 块内,
+                        #   cmd 会把它当成块的收尾 -> "此时不应有 xxx" 直接中止。
+                        #   中文全角括号（）无害, 只查半角。
+                        if b"(" in s[4:] or b")" in s[4:]:
+                            problems.append(
+                                f"{rel}: 第{i}行 echo 文本含半角括号, 会破坏 if() 块")
+                        continue
+                    if any(b > 127 for b in ln):
+                        problems.append(f"{rel}: 第{i}行(非 echo)含非 ASCII 字节")
+            elif ext == ".ps1":
+                if not raw.startswith(b"\xef\xbb\xbf"):
+                    problems.append(f"{rel}: .ps1 缺 UTF-8 BOM, 中文会乱码")
+            elif ext == ".sh":
+                if b"\r" in raw:
+                    problems.append(f"{rel}: .sh 含 CR, shebang 会报 bad interpreter")
+    if problems:
+        for p in problems:
+            log(f"  [X] 自检: {p}")
+    else:
+        log("  [OK] 编码自检通过: bat=GBK/CRLF, ps1=UTF-8-BOM, sh=UTF-8/LF")
+    return problems
 
 QUICK_TXT = """【怎么用 —— 就三步】
 ================================================================
@@ -424,18 +571,17 @@ def write_root_files(pkg_dir, linux_on, windows_on, log=print):
         os.chmod(p, 0o755)
         made.append("clean.sh")
     if windows_on:
+        # ★ .bat 必须 GBK + CRLF: cmd 用 OEM 码页(936)解码, UTF-8 中文会变乱码
         p = os.path.join(pkg_dir, "deploy.bat")
-        with open(p, "w", encoding="utf-8", newline="\r\n") as f:
-            f.write(DEPLOY_BAT)
+        _write_enc(p, DEPLOY_BAT, "gbk", "\r\n")
         made.append("deploy.bat")
         p = os.path.join(pkg_dir, "clean.bat")
-        with open(p, "w", encoding="utf-8", newline="\r\n") as f:
-            f.write(CLEAN_BAT)
+        _write_enc(p, CLEAN_BAT, "gbk", "\r\n")
         made.append("clean.bat")
 
+    # ★ 这个文件是给"双击用记事本看"的普通人, 存 GBK 才是记事本最稳的形态
     p = os.path.join(pkg_dir, "使用说明.txt")
-    with open(p, "w", encoding="utf-8") as f:
-        f.write(QUICK_TXT)
+    _write_enc(p, QUICK_TXT, "gbk", "\r\n")
     made.append("使用说明.txt")
     log(f"  [OK] 顶层入口: {', '.join(made)}")
     return made
@@ -457,6 +603,8 @@ def assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
             src, dst,
             ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "_build"),
         )
+        # ★ 复制过来的模板可能是 UTF-8/LF, 目标机读不了 -> 统一转码
+        normalize_tree(dst, plat, log=log)
 
         assets = os.path.join(dst, "assets")
 
@@ -646,6 +794,11 @@ def generate(repo_root, linux_on, windows_on, arch, auth, pub,
     write_pkg_readme(pkg_dir, linux_on, windows_on, bool(auth),
                      bool(pub and windows_on), want_7zip=want_7zip,
                      offline=offline, log=log)
+
+    # ★ 出包前自检编码/换行 —— 这些坑一旦漏到目标机就是"包根本不跑"
+    problems = verify_package(pkg_dir, log=log)
+    if problems:
+        log(f"[!] 自检发现 {len(problems)} 处问题, 包已生成但请先修复再发出去。")
 
     made = []
     if fmt in ("tar.gz", "both"):

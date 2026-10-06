@@ -6,25 +6,50 @@
 # 依赖: PowerShell (Win10/11 自带). 不需要 curl/wget/python.
 #       Tailscale MSI 已预置 assets/. 需管理员身份 (装服务/功能/写 ProgramData).
 #
-# 用法: 右键 connect-windows.bat -> 以管理员身份运行 (会自动提权并执行本脚本)
+# 用法(二选一, 都不需要你自己去想"管理员"):
+#   ① 双击/右键 程序\windows\connect-windows.bat   -> 会自动弹 UAC 提权
+#   ② 本脚本会自己检查权限, 不是管理员就自动 UAC 重启自己
+# 参数:  -DryRun   只做检查与打印, 不改动系统（排障用, 不需要管理员）
+
+param([switch]$DryRun)
 
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $TSExe    = 'C:\Program Files\Tailscale\tailscale.exe'
 # 不写死版本号: 通配取 assets\ 下任意 tailscale-setup-*.msi (换版本无需改脚本)
-$MSI      = (Get-ChildItem (Join-Path $ScriptDir 'assets') -Filter 'tailscale-setup-*.msi' -ErrorAction SilentlyContinue |
-             Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+# ★ 必须先给空串再覆盖: 轻量包没有 MSI, 直接对 $null 调 Test-Path 会抛
+#   "Cannot bind argument to parameter 'Path' because it is null" 并让脚本中断。
+$MSI = ''
+$hit = Get-ChildItem (Join-Path $ScriptDir 'assets') -Filter 'tailscale-setup-*.msi' -ErrorAction SilentlyContinue |
+       Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($hit) { $MSI = $hit.FullName }
 $KeysDir  = Join-Path $ScriptDir 'keys'
 $AdminKeys= 'C:\ProgramData\ssh\administrators_authorized_keys'
 $script:GenKeyPath = $null   # 若本脚本代生成密钥对, 记录私钥路径, Finish 时打印 -i 连接命令
-$SCRIPT_ID = 'v0.6-win-20261006'
+$SCRIPT_ID = 'v0.7-win-20261006'
 
 function Banner($m){ Write-Host ''; Write-Host "==== $m ====" -ForegroundColor Cyan }
 
-# ---- 0. 管理员检查 ----
-if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host '[X] 需要管理员权限. 请右键 connect-windows.bat -> 以管理员身份运行.' -ForegroundColor Red
-    Read-Host '回车退出'; exit 1
+# ---- 0. 权限: 不是管理员就自动弹 UAC 用管理员身份重启自己 ----
+#  ★ 提权逻辑放在 ps1 里(而不是 bat 里拼三层引号), 彻底避免路径含空格/中文时的引号地狱
+$IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $IsAdmin -and -not $DryRun) {
+    Write-Host ''
+    Write-Host '[!] 需要管理员权限, 正在弹出 UAC 提权窗口 ...' -ForegroundColor Yellow
+    Write-Host '    请在弹窗里点【是】; 之后真正干活的是新弹出的那个窗口。' -ForegroundColor Gray
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass',
+                 '-File', ('"' + $PSCommandPath + '"'))
+    try {
+        Start-Process powershell -Verb RunAs -ArgumentList $argList
+    } catch {
+        Write-Host '[X] 提权被拒绝或失败。请右键 程序\windows\connect-windows.bat -> 以管理员身份运行。' -ForegroundColor Red
+        Read-Host '按 Enter 退出'
+    }
+    exit 0
+}
+if ($DryRun) {
+    Write-Host '[i] -DryRun 模式: 只做检查, 不会安装/修改任何东西。' -ForegroundColor Cyan
+    Write-Host "    当前是否管理员: $IsAdmin"
 }
 
 Banner "纯 Tailscale 离线版 · Windows 被控端 $SCRIPT_ID"
@@ -32,9 +57,16 @@ Write-Host "本机用户: $env:USERNAME   主机名: $env:COMPUTERNAME"
 
 # ---- 1. 安装 Tailscale (优先预置 MSI 离线; 轻量包则联网下载 EXE) ----
 function Install-Tailscale {
+    if ($DryRun) {
+        Write-Host '[1/5] [DryRun] Tailscale 安装: ' -NoNewline
+        if (Test-Path $TSExe) { Write-Host '已安装, 无需动作' }
+        elseif ($MSI -and (Test-Path $MSI)) { Write-Host "会用包内 MSI 离线安装 -> $MSI" }
+        else { Write-Host '包内无 MSI(轻量包), 需要联网下载安装器' }
+        return
+    }
     if (Test-Path $TSExe) { Write-Host '[1/5] Tailscale 已安装, 跳过安装.'; return }
 
-    if (-not (Test-Path $MSI)) {
+    if (-not ($MSI -and (Test-Path $MSI))) {
         # 轻量模式: 包内无 MSI, 联网下载官方安装器
         Write-Host '[1/5] 本包为【轻量模式】(未内置 MSI), 联网下载 Tailscale 安装器 ...' -ForegroundColor Cyan
         $tmpExe = Join-Path $env:TEMP 'tailscale-setup.exe'
@@ -66,6 +98,13 @@ function Install-Tailscale {
 
 # ---- 2. 入网 (authkey) ----
 function Join-Tailnet {
+    if ($DryRun) {
+        $hasKey = [bool]$env:TS_AUTHKEY -or (Test-Path (Join-Path $KeysDir 'authkey.local.txt'))
+        $k = '未预置, 运行时提示粘贴'
+        if ($hasKey) { $k = '已预置, 自动入网' }
+        Write-Host "[2/5] [DryRun] 入网 authkey: $k"
+        return
+    }
     Write-Host '[2/5] 启动 Tailscale 并入网...'
     $key = $env:TS_AUTHKEY
     $localKey = Join-Path $KeysDir 'authkey.local.txt'
@@ -86,6 +125,16 @@ function Join-Tailnet {
 
 # ---- 3. 启用 OpenSSH Server ----
 function Enable-SSHServer {
+    if ($DryRun) {
+        $state = '查询不到(需管理员权限, 或系统较旧)'
+        try {
+            $cap = Get-WindowsCapability -Online -ErrorAction Stop |
+                   Where-Object { $_.Name -like 'OpenSSH.Server*' }
+            if ($cap) { $state = $cap.State }
+        } catch { }
+        Write-Host "[3/5] [DryRun] OpenSSH Server: $state"
+        return
+    }
     Write-Host '[3/5] 配置 Windows OpenSSH Server (公钥免密)...'
     $cap = Get-WindowsCapability -Online | Where-Object { $_.Name -like 'OpenSSH.Server*' }
     if ($cap.State -ne 'Installed') {
@@ -104,10 +153,10 @@ function Enable-SSHServer {
 function Print-KeyHelp {
     Write-Host '      ── 如何在【控制端电脑】上拿到你的公钥 (复制输出整行) ──' -ForegroundColor DarkCyan
     Write-Host '      ① 控制端是 Windows:' -ForegroundColor White
-    Write-Host '         ▸ CMD (命令提示符):' -ForegroundColor Gray
+    Write-Host '         - CMD (命令提示符):' -ForegroundColor Gray
     Write-Host '             type %USERPROFILE%\.ssh\id_ed25519.pub' -ForegroundColor Green
     Write-Host '             若提示找不到文件, 先生成:  ssh-keygen -t ed25519 -N "" -f %USERPROFILE%\.ssh\id_ed25519' -ForegroundColor Green
-    Write-Host '         ▸ PowerShell (注意: 路径用 $env:, 不要用 %VAR%):' -ForegroundColor Gray
+    Write-Host '         - PowerShell (注意: 路径用 $env:, 不要用 %VAR%):' -ForegroundColor Gray
     Write-Host '             type "$env:USERPROFILE\.ssh\id_ed25519.pub"' -ForegroundColor Green
     Write-Host '             若没有, 生成密钥对 (提示 passphrase 时直接回车两次):' -ForegroundColor Gray
     Write-Host '             ssh-keygen -t ed25519 -f "$env:USERPROFILE\.ssh\id_ed25519"' -ForegroundColor Green
@@ -121,6 +170,12 @@ function Print-KeyHelp {
 }
 
 function Install-PubKeys {
+    if ($DryRun) {
+        $pf = @(Get-ChildItem $KeysDir -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '\.pub(\.local)?$' })
+        Write-Host "[4/5] [DryRun] keys/ 下可用公钥文件: $($pf.Count) 个"
+        return
+    }
     Write-Host '[4/5] 部署控制端公钥 (免密登录)...'
     Print-KeyHelp
     $pubs = @()
@@ -149,12 +204,12 @@ function Install-PubKeys {
             }
             $pubs += (Get-Content "$genKey.pub").Trim()
             $script:GenKeyPath = $genKey
-            Write-Host "      ✅ 已生成私钥: $genKey" -ForegroundColor Green
+            Write-Host "      [OK] 已生成私钥: $genKey" -ForegroundColor Green
             Write-Host '      → 请把这个私钥文件复制到你的【控制端电脑】(私钥必须放在连出那台机器上):' -ForegroundColor Yellow
             Write-Host '          Windows 控制端: 复制到 用户目录\.ssh\id_ed25519  (CMD: %USERPROFILE%\.ssh\id_ed25519)' -ForegroundColor Green
             Write-Host '          Linux/macOS 控制端: 复制到 ~/.ssh/id_ed25519 并执行 chmod 600' -ForegroundColor Green
             Write-Host '      → 之后即可用该私钥免密连入本机 (连接命令见末尾).' -ForegroundColor Yellow
-            Write-Host '      ⚠ 拷贝到控制端后, 建议删掉本机这份私钥 (clean-windows.bat 会自动清除).' -ForegroundColor Gray
+            Write-Host '      [!] 拷贝到控制端后, 建议删掉本机这份私钥 (clean-windows.bat 会自动清除).' -ForegroundColor Gray
         } else {
             Write-Host '      请按上方指示, 在控制端电脑生成公钥, 把那整行粘回来.' -ForegroundColor Yellow
             Print-KeyHelp
@@ -177,8 +232,9 @@ function Install-PubKeys {
 # ---- 5. 完成 ----
 function Finish {
     Write-Host '[5/5] 完成.'
-    $ip = (& $TSExe ip -4 2>$null) -join ','
-    Banner '本机(被控端)已就绪'
+    if ($DryRun) { $ip = '100.x.x.x' } else { $ip = (& $TSExe ip -4 2>$null) -join ',' }
+    if ($DryRun) { Banner '[DryRun] 流程预演结束 —— 真正部署后这里会显示:' }
+    else { Banner '本机(被控端)已就绪' }
     Write-Host "  Tailscale IP : $ip"
     if ($script:GenKeyPath) {
         Write-Host "  连接命令    : ssh -i `"$script:GenKeyPath`" $env:USERNAME@$ip"
@@ -189,7 +245,7 @@ function Finish {
     Write-Host '  (控制端需已装 Tailscale 客户端并在同一 tailnet)'
     Write-Host ''
     Write-Host '  开机自启: Tailscale 服务 + sshd 均 Automatic (无需额外配置)。'
-    Write-Host '  ⚠ 建议到 login.tailscale.com 把本机 Key expiry 设为 Disable, 否则过期需重跑.'
+    Write-Host '  [!] 建议到 login.tailscale.com 把本机 Key expiry 设为 Disable, 否则过期需重跑.'
     Write-Host '  用完清洗: 以管理员运行 clean-windows.bat'
     Write-Host ''
     # ---------- 传文件: 只提示, 不引入任何新依赖 ----------
@@ -200,7 +256,7 @@ function Finish {
     Write-Host ''
     Write-Host "       scp -r 文件或目录 $env:USERNAME@$($ip):./"
     Write-Host ''
-    Write-Host '     文件会落在本机 C:\Users\'$env:USERNAME'\ 下。'
+    Write-Host "     文件会落在本机 C:\Users\$env:USERNAME\ 下。"
     Write-Host '     (控制端若提示输密码, 本方案用的是公钥免密, 直接回车即可)'
 }
 
@@ -217,6 +273,13 @@ try {
     Write-Host $_.Exception.Message -ForegroundColor Red
     if ($_.ScriptStackTrace) { Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray }
     Write-Host '可重跑本脚本 (已完成的步骤会自动跳过); 或截图以上报错反馈.' -ForegroundColor Yellow
+}
+
+if ($DryRun) {
+    Write-Host ''
+    Write-Host '==================== [DryRun] 预演结束 ====================' -ForegroundColor Cyan
+    Write-Host '  上面只是"将要做什么", 系统未做任何改动。' -ForegroundColor Cyan
+    Write-Host '  真正部署请双击: 程序\windows\connect-windows.bat  (会自动弹 UAC)' -ForegroundColor Cyan
 }
 
 Write-Host ''
