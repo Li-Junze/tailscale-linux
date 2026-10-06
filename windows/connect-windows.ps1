@@ -14,7 +14,8 @@ $TSExe    = 'C:\Program Files\Tailscale\tailscale.exe'
 $MSI      = Join-Path $ScriptDir 'assets\tailscale-setup-1.102.4-amd64.msi'
 $KeysDir  = Join-Path $ScriptDir 'keys'
 $AdminKeys= 'C:\ProgramData\ssh\administrators_authorized_keys'
-$SCRIPT_ID = 'v0.2-win-20261006'
+$script:GenKeyPath = $null   # 若本脚本代生成密钥对, 记录私钥路径, Finish 时打印 -i 连接命令
+$SCRIPT_ID = 'v0.3-win-20261006'
 
 function Banner($m){ Write-Host ''; Write-Host "==== $m ====" -ForegroundColor Cyan }
 
@@ -89,7 +90,8 @@ function Print-KeyHelp {
     Write-Host '          cat ~/.ssh/id_ed25519.pub' -ForegroundColor Green
     Write-Host '          若没有:  ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519' -ForegroundColor Green
     Write-Host '      ③ 已有 keys/ 目录里的 *.pub 文件则无需粘贴, 脚本自动读取.' -ForegroundColor Gray
-    Write-Host '      (复制 ssh-ed25519 AAAA... 开头的那整行, 回到下面粘贴)' -ForegroundColor DarkCyan
+        Write-Host '      (复制 ssh-ed25519 AAAA... 开头的那整行, 回到下面粘贴)' -ForegroundColor DarkCyan
+        Write-Host '      ※ 若控制端完全没密钥, 本脚本第4步可帮你在本机直接生成一对 (选 y 即可).' -ForegroundColor Magenta
 }
 
 function Install-PubKeys {
@@ -97,13 +99,38 @@ function Install-PubKeys {
     Print-KeyHelp
     $pubs = @()
     Get-ChildItem $KeysDir -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\.pub(\.local)?$' } | ForEach-Object { (Get-Content $_.FullName) | ForEach-Object { if ($_.Trim()) { $pubs += $_.Trim() } } }
-    $extra = Read-Host '粘贴控制端公钥 (直接粘一行 ssh-ed25519 ..., 或回车用 keys/ 内文件)'
+    $extra = Read-Host '粘贴控制端公钥 (直接粘一行 ssh-ed25519 ..., 或回车用 keys/ 内文件/自动生成)'
     if ($extra.Trim()) { $pubs += $extra.Trim() }
+
     if ($pubs.Count -eq 0) {
-        Write-Host '      [!] 还未检测到任何公钥, 控制端将无法免密登录.' -ForegroundColor Red
-        Write-Host '      请按上方指示, 在控制端电脑执行取钥命令, 然后把那整行粘回来.' -ForegroundColor Yellow
-        Print-KeyHelp
-        return
+        Write-Host '      [!] 未检测到任何公钥, 控制端将无法免密登录.' -ForegroundColor Red
+        $gen = Read-Host '      是否在本机生成一对新密钥供控制端使用? (y/N, 默认 N)'
+        if ($gen -match '^[Yy]') {
+            $genKey = Join-Path $KeysDir 'id_ed25519'
+            if (Test-Path "$genKey.pub") {
+                Write-Host "      已存在 $genKey.pub, 直接复用." -ForegroundColor Gray
+            } else {
+                Write-Host '      生成密钥对 (ed25519, 无口令)...'
+                & ssh-keygen -t ed25519 -N '' -f "$genKey" 2>&1 | Out-Host
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Host '      [X] ssh-keygen 失败 (可能未装 OpenSSH 客户端). 请按上方指示在控制端手动生成.' -ForegroundColor Red
+                    Print-KeyHelp
+                    return
+                }
+            }
+            $pubs += (Get-Content "$genKey.pub").Trim()
+            $script:GenKeyPath = $genKey
+            Write-Host "      ✅ 已生成私钥: $genKey" -ForegroundColor Green
+            Write-Host '      → 请把这个私钥文件复制到你的【控制端电脑】(私钥必须放在连出那台机器上):' -ForegroundColor Yellow
+            Write-Host '          Windows 控制端: 复制到 %USERPROFILE%\.ssh\id_ed25519' -ForegroundColor Green
+            Write-Host '          Linux/macOS 控制端: 复制到 ~/.ssh/id_ed25519 并执行 chmod 600' -ForegroundColor Green
+            Write-Host '      → 之后即可用该私钥免密连入本机 (连接命令见末尾).' -ForegroundColor Yellow
+            Write-Host '      ⚠ 拷贝到控制端后, 建议删掉本机这份私钥 (clean-windows.bat 会自动清除).' -ForegroundColor Gray
+        } else {
+            Write-Host '      请按上方指示, 在控制端电脑生成公钥, 把那整行粘回来.' -ForegroundColor Yellow
+            Print-KeyHelp
+            return
+        }
     }
     if (-not (Test-Path 'C:\ProgramData\ssh')) { New-Item -ItemType Directory -Path 'C:\ProgramData\ssh' -Force | Out-Null }
     $pubs | Set-Content -Path $AdminKeys -Encoding ASCII
@@ -119,7 +146,12 @@ function Finish {
     $ip = (& $TSExe ip -4 2>$null) -join ','
     Banner '本机(被控端)已就绪'
     Write-Host "  Tailscale IP : $ip"
-    Write-Host "  连接命令    : ssh $env:USERNAME@$ip"
+    if ($script:GenKeyPath) {
+        Write-Host "  连接命令    : ssh -i `"$script:GenKeyPath`" $env:USERNAME@$ip"
+        Write-Host '                (用本脚本生成的私钥; 已拷到控制端则把路径换成控制端那份)'
+    } else {
+        Write-Host "  连接命令    : ssh $env:USERNAME@$ip"
+    }
     Write-Host '  (控制端需已装 Tailscale 客户端并在同一 tailnet)'
     Write-Host ''
     Write-Host '  开机自启: Tailscale 服务 + sshd 均 Automatic (无需额外配置).'
@@ -133,5 +165,6 @@ Join-Tailnet
 Enable-SSHServer
 Install-PubKeys
 Finish
+
 
 

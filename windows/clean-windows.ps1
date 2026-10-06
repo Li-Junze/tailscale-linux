@@ -35,15 +35,19 @@ Write-Host '[3/4] 移除 OpenSSH Server 功能...'
 try { Remove-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null; Write-Host '      已移除.' }
 catch { Write-Host '      [!] 移除失败或本就未安装 (可忽略).' -ForegroundColor Yellow }
 
-# 4. 删除公钥与状态
-Write-Host '[4/4] 删除公钥与 Tailscale 状态...'
-Remove-Item $AdminKeys -Force -ErrorAction SilentlyContinue
-Remove-Item 'C:\ProgramData\ssh' -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item 'C:\ProgramData\Tailscale' -Recurse -Force -ErrorAction SilentlyContinue
+                     # 4. 删除公钥与状态
+                     Write-Host '[4/4] 删除公钥与 Tailscale 状态...'
+                     Remove-Item $AdminKeys -Force -ErrorAction SilentlyContinue
+                     Remove-Item 'C:\ProgramData\ssh' -Recurse -Force -ErrorAction SilentlyContinue
+                     Remove-Item 'C:\ProgramData\Tailscale' -Recurse -Force -ErrorAction SilentlyContinue
+                     # 清除本脚本代生成的私钥 (keys/id_ed25519[.pub]), 避免私钥残留在被控端
+                     Remove-Item (Join-Path $ScriptDir 'keys\id_ed25519') -Force -ErrorAction SilentlyContinue
+                     Remove-Item (Join-Path $ScriptDir 'keys\id_ed25519.pub') -Force -ErrorAction SilentlyContinue
 
 Write-Host ''
 Write-Host '本机连接痕迹已清除 (服务/功能/公钥/状态目录).' -ForegroundColor Green
 Write-Host '⚠ 服务器侧设备仍会显示: 需联网后到 https://login.tailscale.com/admin/machines 删除该节点.' -ForegroundColor Yellow
 Read-Host '回车退出'
+
 
 
