@@ -1,0 +1,25 @@
+# 换行策略
+#
+# 交给目标机的脚本, 最终编码与换行由 builder/core.py 的 normalize_tree() 在打包时决定:
+#   .bat -> GBK + CRLF     (cmd.exe 按 OEM 码页 936 解码, 且 LF 会让括号块碎裂)
+#   .ps1 -> UTF-8 BOM+CRLF (PS 5.1 对无 BOM 文件按 ANSI 读, 中文会乱码)
+#   .sh  -> UTF-8 + LF     (含 CR 会让 shebang 报 bad interpreter)
+#
+# 这里只负责让仓库自身在 Windows(git autocrlf=true) 下不被偷偷改掉字节。
+# 模板文件用 -text 彻底禁掉 git 的换行转换, 保证源码与打包输入完全一致。
+* text=auto eol=lf
+
+*.bat  -text
+*.ps1  -text
+*.vbs  -text
+
+*.sh   text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+
+*.png  -text
+*.gif  -text
+*.jpg  -text
+*.msi  -text
+*.exe  -text
+*.7z   -text
