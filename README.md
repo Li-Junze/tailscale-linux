@@ -1,10 +1,11 @@
 # tailscale-linux
 
-纯 Tailscale 离线远程连接方案 —— 面向**「目标机没有 curl / wget / python3，无法联网下载」**的 Linux 机器，
+纯 Tailscale 离线远程连接方案 —— 面向**「目标机没有 curl / wget / python3，无法联网下载」**的 Linux / Windows 机器，
 把依赖砍到极致：**零额外下载、免密连接、用完一键不留痕**。
 
-> 适用于：临时借用 / 机房裸机 / 受限网络环境下的远程接入。被控端不需要密码、不需要 sshd、
-> 不需要 root、不需要任何传统 OpenSSH 组件。
+> 适用于：临时借用 / 机房裸机 / 受限网络环境下的远程接入。
+> - **Linux 被控端**：Tailscale SSH 内置服务端，免密、无需 root、无需 sshd。
+> - **Windows 被控端**：Tailscale 组网 + 系统自带 OpenSSH Server + 公钥免密（Tailscale SSH 不支持 Windows 服务端）。
 
 ---
 
@@ -24,15 +25,21 @@
 
 ```
 tailscale-linux/
-├── connect-offline.sh     # 离线部署主脚本 (被控端零额外依赖)  ★核心
-├── clean.sh               # 用完清洗 —— 完全不留痕
+├── connect-offline.sh     # 离线部署主脚本 (Linux 被控端零额外依赖)  ★核心
+├── clean.sh               # Linux 用完清洗 —— 完全不留痕
 ├── stage-tailscale.sh     # 预置助手: 在有网机器把二进制打进 assets/
-├── extract.sh             # 解压助手: 一键解包 + 修复权限
+├── extract.sh             # Linux 解压助手: 一键解包 + 修复权限
 ├── assets/                # 存放预置的 tailscale / tailscaled (见内部 README, 不入库)
 ├── keys/                  # ★ authkey 临时存放点 (authkey.local.txt 不入库)
 │   └── authkey.local.txt  #   本地占位, 放真实 key, 自动被脚本读取, 不提交 GitHub
+├── windows/               # ★ Windows 被控端 (离线部署, 详见 windows/README.md)
+│   ├── connect-windows.bat/.ps1  # 部署入口(自动提权) + 主逻辑
+│   ├── clean-windows.bat/.ps1    # 清洗
+│   ├── extract.bat               # 解压助手
+│   ├── assets/                  # 预置 Tailscale MSI (见内部 README, 不入库)
+│   └── keys/                    # authkey + 控制端公钥临时存放
 ├── 我的连接信息.example.txt  # 连接信息脱敏模板
-├── 使用说明(离线版).txt       # 详细中文使用说明
+├── 使用说明(离线版).txt       # 详细中文使用说明 (Linux)
 └── README.md              # 本文件
 ```
 
@@ -100,12 +107,22 @@ https://login.tailscale.com/admin/machines 删除该节点。
 
 ---
 
+## Windows 被控端（新增）
+
+Windows 机器作为被控端（被连入）的离线部署方案见 **[`windows/README.md`](windows/README.md)**。
+
+要点：Tailscale SSH 不支持 Windows 服务端，因此改用 **Tailscale 组网 + 系统自带 OpenSSH Server + 公钥免密**，
+效果与 Linux 版一致（控制端 `ssh 用户@100.x.x.x` 直连，免密码、无公网暴露）。
+预置 `tailscale-setup-*.msi` 离线安装，运行期不依赖任何下载工具。
+
 ## 适用边界
 
-- 本方案**仅 Linux 被控端**专属；你自己的 Windows / macOS 电脑用 `tailscale ssh` 直连即可，无需跑脚本。
+- **Linux 被控端**：无需 root、无需 sshd、无需传统 OpenSSH 组件（用 Tailscale 内置 SSH）。
+- **Windows 被控端**：需管理员权限；依赖系统自带 OpenSSH Server 可选功能（多数镜像可离线启用）。
+- 你自己的控制端电脑（连出到上述被控端）只需装 Tailscale 客户端 + 系统自带 `ssh`，无需本仓库脚本。
 - 目标机需能联网到 Tailscale 控制面（用于 authkey 授权与建立隧道）；二进制本身无需下载。
-- 用户态模式不修改系统网络栈，因此本机清洗能做到真正"零残留"。
+- Linux 用户态模式不修改系统网络栈，本机清洗能做到真正"零残留"；Windows 端卸载服务/功能/公钥后同样干净。
 
 ---
 
-详见 [`使用说明(离线版).txt`](使用说明(离线版).txt)。
+详见 [`使用说明(离线版).txt`](使用说明(离线版).txt)（Linux）与 [`windows/README.md`](windows/README.md)（Windows）。
