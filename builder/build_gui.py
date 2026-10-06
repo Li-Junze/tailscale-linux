@@ -171,7 +171,6 @@ DEFAULT_CONFIG = {
     "out_dir": os.path.join(os.path.expanduser("~"), "Desktop"),
     "want_7z_linux": False,
     "want_7z_windows": False,
-    "with_transfer": True,
     "authkey": "",            # 受 remember_auth 开关控制
     "pubkey": "",
     "remember_auth": False,   # authkey 默认【不】记住, 避免明文长期落盘
@@ -213,7 +212,7 @@ def save_config(cfg, path=None, log=None):
 
 
 def build_summary(linux_on, win_on, offline, want_7zip, arch, fmt_index,
-                  has_auth, has_pub, with_transfer=True):
+                  has_auth, has_pub):
     """生成"点按钮前就能核对"的摘要文本, 避免选错平台还看不出来。"""
     plats = []
     if linux_on:
@@ -229,9 +228,8 @@ def build_summary(linux_on, win_on, offline, want_7zip, arch, fmt_index,
     ) or "不内置 7-Zip"
     auth = "已填" if has_auth else "未填(对方手输)"
     pub = "已填" if has_pub else "未填"
-    tr = "含传文件工具" if with_transfer else "不含传文件"
     return (f"本次将生成： 【{plat}】 ｜ {mode} ｜ {fmts} ｜ 7-Zip: {z}"
-            f" ｜ authkey {auth} ｜ 公钥 {pub} ｜ {tr}")
+            f" ｜ authkey {auth} ｜ 公钥 {pub}")
 
 
 # ------------------------------------------------------------ 顶层入口脚本内容
@@ -320,122 +318,10 @@ QUICK_TXT = """【怎么用 —— 就三步】
 """
 
 
-QUICK_TXT_TRANSFER = """【怎么用 —— 部署 + 传文件】
-================================================================
-
-  ■ 第一步: 部署远程连接
-     Linux   ->  bash deploy.sh
-     Windows -> 右键 deploy.bat  选"以管理员身份运行"
-
-     跑完屏幕会打印 Tailscale IP(形如 100.x.x.x), 记下来。
-
-----------------------------------------------------------------
-  ■ 第二步: 传文件(双向, 双方都能收也能发)
-
-     【被控端】双击 接收文件.bat (Linux 用 bash 收文件.sh)
-        屏幕会显示:  一个 100.x.x.x 的 IP  +  一个 6 位口令
-        ★ 保持这个窗口开着, 文件会存到 程序/文件传输/inbox/
-
-     【控制端】把要发的文件/文件夹, 拖到 发送文件.bat 图标上
-        按提示填对方的 IP 和口令, 回车即可。
-
-     ★ 不用装 scp / rsync / sftp, 只用 python3 标准库。
-     ★ 对方没装 python? 见 README 的说明。
-
-----------------------------------------------------------------
-  ■ 第三步: 用完清洗
-     Linux   ->  bash clean.sh
-     Windows -> 右键 clean.bat  选"以管理员身份运行"
-
-----------------------------------------------------------------
-【只有这几个文件要碰】
-  deploy.sh / deploy.bat    部署 (只跑一次)
-  接收文件.bat / 收文件.sh  启动接收, 保持窗口开着
-  发送文件.bat              拖文件到它上面就能发
-  clean.sh  / clean.bat     清洗 (用完跑)
-  README.md                 说明文档
-  使用说明.txt              就是本文件
-
-  『程序』文件夹是实现细节, 不需要打开, 也不用动。
-----------------------------------------------------------------
-【安全提醒】
-  本包内含明文 Tailscale authkey, 只发给你信任的人。
-  对方跑完 clean 脚本后本机痕迹会被清除;
-  但你的 Tailscale 后台设备列表里仍会留着这台机器,
-  要彻底移除请到 https://login.tailscale.com/admin/machines 删除该节点。
-"""
 
 
-# ------------------------------------------------------------ 传文件入口(顶层)
-# 这几个只在包根做"定位 + 转交", 实际逻辑在 程序/文件传输/p2p.py
-DRAG_SEND_BAT = """@echo off
-REM ============================================================
-REM  发送文件 —— 把文件/文件夹拖到本文件图标上松手即可
-REM
-REM  前提: 对方已经双击运行了『接收文件.bat』并把窗口留着
-REM  屏幕会显示一个 100.x.x.x 的 IP 和 6 位口令, 按提示填进去。
-REM ============================================================
-cd /d "%~dp0"
-if not exist "程序\\文件传输\\p2p.py" (
-  echo [X] 找不到 程序\\文件传输\\p2p.py, 包不完整。
-  pause & exit /b 1
-)
-cd /d "程序\\文件传输"
-call dragdrop-send.bat %*
-"""
 
-RECV_FILES_BAT = """@echo off
-REM ============================================================
-REM  接收文件 —— 双击本文件, 保持窗口开着
-REM
-REM  启动后会显示  6 位口令 + 本机 Tailscale IP,
-REM  把这两个告诉对方(或对方直接发过来), 文件就会存到 inbox 文件夹。
-REM
-REM  依赖: python3 本体即可(标准库), 不需要 scp/rsync/sftp。
-REM ============================================================
-cd /d "%~dp0"
-if not exist "程序\\文件传输\\p2p.py" (
-  echo [X] 找不到 程序\\文件传输\\p2p.py, 包不完整。
-  pause & exit /b 1
-)
-cd /d "程序\\文件传输"
-python p2p.py serve --dir inbox --gui
-if errorlevel 1 (
-  echo.
-  echo [!] 启动失败。若提示找不到 python, 请先安装 Python 3.8+。
-  pause
-)
-"""
-
-RECV_SH = """#!/usr/bin/env bash
-# ============================================================
-#  收文件.sh —— 被控端(Linux / macOS) 一键启动文件接收
-#
-#  bash 收文件.sh
-#  屏幕会显示 6 位口令 + 本机 Tailscale IP, 保持窗口开着。
-#  收件目录: 程序/文件传输/inbox
-#
-#  依赖: python3 本体(标准库即可), 不需要 scp / rsync / sftp。
-#  GUI 需要 tkinter(可选), 缺了自动降级为命令行, 功能不受影响。
-# ============================================================
-set -u
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$HERE/程序/文件传输" 2>/dev/null || {
-  echo "[X] 找不到 程序/文件传输/, 包不完整。"; exit 1; }
-PY=""
-for c in python3 python; do
-  if command -v "$c" >/dev/null 2>&1; then PY="$c"; break; fi
-done
-if [ -z "$PY" ]; then
-  echo "[X] 本机没有 python3 / python。"
-  echo "    请先装 python3, 或建好通道后直接用 scp。"
-  exit 1
-fi
-exec "$PY" p2p.py serve --dir inbox --gui
-"""
-
-
-def write_root_files(pkg_dir, linux_on, windows_on, with_transfer, log=print):
+def write_root_files(pkg_dir, linux_on, windows_on, log=print):
     """顶层只放醒目入口 + 文档, 实现细节全在 程序/ 下。"""
     made = []
     if linux_on:
@@ -459,26 +345,9 @@ def write_root_files(pkg_dir, linux_on, windows_on, with_transfer, log=print):
             f.write(CLEAN_BAT)
         made.append("clean.bat")
 
-    if with_transfer:
-        # 传文件入口: 控制端拖拽发送 / 被控端一键接收
-        p = os.path.join(pkg_dir, "发送文件.bat")
-        with open(p, "w", encoding="utf-8", newline="\r\n") as f:
-            f.write(DRAG_SEND_BAT)
-        made.append("发送文件.bat")
-        p = os.path.join(pkg_dir, "接收文件.bat")
-        with open(p, "w", encoding="utf-8", newline="\r\n") as f:
-            f.write(RECV_FILES_BAT)
-        made.append("接收文件.bat")
-        if linux_on:
-            p = os.path.join(pkg_dir, "收文件.sh")
-            with open(p, "w", encoding="utf-8", newline="\n") as f:
-                f.write(RECV_SH)
-            os.chmod(p, 0o755)
-            made.append("收文件.sh")
-
     p = os.path.join(pkg_dir, "使用说明.txt")
     with open(p, "w", encoding="utf-8") as f:
-        f.write(QUICK_TXT if not with_transfer else QUICK_TXT_TRANSFER)
+        f.write(QUICK_TXT)
     made.append("使用说明.txt")
     log(f"  ✓ 顶层入口: {', '.join(made)}")
     return made
@@ -486,7 +355,7 @@ def write_root_files(pkg_dir, linux_on, windows_on, with_transfer, log=print):
 
 # ------------------------------------------------------------ 主体装配
 def assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
-                     want_7zip=(), offline=True, with_transfer=True, log=print):
+                     want_7zip=(), offline=True, log=print):
     """offline=True  -> 保留 assets 预置二进制(包大, 目标机零下载)
        offline=False -> 剥离二进制(包小, 目标机联网自取)"""
     inner = os.path.join(pkg_dir, "程序")
@@ -568,25 +437,9 @@ def assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
             if not msi:
                 log("  · 本包不含 Windows 预置 MSI → 目标机需联网（deploy.bat 会自动下载）")
 
-    # ---- 传文件工具 (顶层放入口, 逻辑收进 程序/文件传输/) ----
-    if with_transfer:
-        tsrc = os.path.join(repo_root, "tools")
-        if os.path.isdir(tsrc):
-            tdst = os.path.join(inner, "文件传输")
-            shutil.copytree(tsrc, tdst,
-                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
-                                                          "inbox", "收件箱"))
-            for f in os.listdir(tdst):
-                fp = os.path.join(tdst, f)
-                if os.path.isfile(fp) and f.endswith((".sh", ".py")):
-                    os.chmod(fp, 0o755)
-            log("  ✓ 内置传文件工具 → 程序/文件传输/ (p2p.py + 拖拽入口)")
-        else:
-            log("  ⚠ 未找到 tools/ 目录, 本包不含传文件功能")
-
 
 def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
-                     want_7zip=(), offline=True, with_transfer=True, log=print):
+                     want_7zip=(), offline=True, log=print):
     """生成包内 README.md（覆盖仓库总览，面向拿到包的人）"""
     L = []
     L.append("# Tailscale 远程连接 · 部署包")
@@ -599,11 +452,8 @@ def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
     L.append("|---|---|---|")
     L.append("| 1. 部署 | `bash deploy.sh` | 右键 `deploy.bat` → 以管理员身份运行 |")
     L.append("| 2. 记下屏幕打印的 100.x.x.x | 同左 | 同左 |")
-    if with_transfer:
-        L.append("| 3. 传文件（可选） | `bash 收文件.sh` 接收 | 双击 `接收文件.bat` 接收 |")
-        L.append("| 4. 用完清洗 | `bash clean.sh` | 右键 `clean.bat` → 以管理员身份运行 |")
-    else:
-        L.append("| 3. 用完清洗 | `bash clean.sh` | 右键 `clean.bat` → 以管理员身份运行 |")
+    L.append("| 3. 传文件（可选） | 用 `scp` 往本机发，见下 | 同左 |")
+    L.append("| 4. 用完清洗 | `bash clean.sh` | 右键 `clean.bat` → 以管理员身份运行 |")
     L.append("")
     L.append("> 部署完之后屏幕会显示你的 Tailscale IP（形如 `100.x.x.x`）。")
     L.append("> 回到你自己（控制端）的电脑上，用它连进来：")
@@ -619,14 +469,9 @@ def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
     L.append("clean.sh  / clean.bat    ★ 清洗 —— 用完只需要这个")
     L.append("使用说明.txt              三步极简说明")
     L.append("README.md                本文件")
-    if with_transfer:
-        L.append("接收文件.bat / 收文件.sh  ★ 启动接收, 保持窗口开着")
-        L.append("发送文件.bat              ★ 把文件拖到它上面就能发")
     L.append("程序/                    实现细节（不用打开）")
     L.append("  ├── linux/             脚本 + 预置二进制 + 你的密钥")
-    L.append("  ├── windows/")
-    if with_transfer:
-        L.append("  └── 文件传输/           p2p.py 双向传文件")
+    L.append("  └── windows/")
     L.append("```")
     L.append("")
     L.append("## 本包已预置的内容")
@@ -642,41 +487,19 @@ def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
         L.append("> ⚠ 本包是**轻量版**：目标机必须能联网才能自动获取 Tailscale 官方安装包。")
         L.append("> 如果目标机连不上网，请让制包者改用「离线模式」重新生成。")
         L.append("")
-    if with_transfer:
-        L.append("## 怎么传文件（双向）")
-        L.append("")
-        L.append("建好通道后，传文件**不用 scp / rsync / sftp**，只靠 python3 标准库。")
-        L.append("")
-        L.append("**被控端（收）**")
-        L.append("")
-        L.append("```")
-        L.append("Windows : 双击 接收文件.bat        # 保持窗口开着")
-        L.append("Linux   : bash 收文件.sh")
-        L.append("```")
-        L.append("")
-        L.append("屏幕会显示一个 `100.x.x.x` 的 IP 和一个 6 位口令，把它们告诉对方。")
-        L.append("收到的文件在 `程序/文件传输/inbox/`。")
-        L.append("")
-        L.append("**控制端（发）**")
-        L.append("")
-        L.append("最省事：把要发的文件/文件夹**直接拖到 `发送文件.bat` 图标上**，按提示填 IP 和口令。")
-        L.append("")
-        L.append("也可以用命令行：")
-        L.append("")
-        L.append("```bash")
-        L.append("cd 程序/文件传输")
-        L.append("python p2p.py send 100.x.x.x 报告.pdf")
-        L.append("python p2p.py send 100.x.x.x -a 整个目录      # 自动打包成 zip")
-        L.append("")
-        L.append("# 反向: 从对方取文件")
-        L.append("python p2p.py fetch 100.x.x.x -l               # 先看有什么")
-        L.append("python p2p.py fetch 100.x.x.x 截图.png         # 取回")
-        L.append("```")
-        L.append("")
-        L.append("> 依赖：**python3 本体即可**。`--gui` 弹窗按钮需要 tkinter，")
-        L.append("> 精简 Linux 没有 tkinter 也能正常收文件（自动用命令行模式）。")
-        L.append("")
-    L.append("## 常见问题")
+    L.append("## 怎么传文件")
+    L.append("")
+    L.append("**不需要装任何东西** —— 用系统自带的 `scp` 即可（Linux / Windows 都自带）。")
+    L.append("")
+    L.append("在你自己的（控制端）电脑上执行，把 IP 换成上面显示的那个：")
+    L.append("")
+    L.append("```bash")
+    L.append("scp -r 文件或目录 用户名@100.x.x.x:~/")
+    L.append("```")
+    L.append("")
+    L.append("> 本包已在被控端准备好 OpenSSH（Windows）或用 Tailscale 内置 SSH（Linux），")
+    L.append("> 所以是免密的。deploy 跑完后屏幕也会直接打印这条命令。")
+    L.append("")
     L.append("")
     L.append("**Q: 部署要管理员权限吗？**  \nA: Linux 不需要（本工具固定跑在用户态 `~/.tailscale`）；"
              "Windows 需要，因为要装服务。")
@@ -701,8 +524,7 @@ def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
 
 
 def generate(repo_root, linux_on, windows_on, arch, auth, pub,
-             out_dir, prefix, fmt, want_7zip=(), offline=True,
-             with_transfer=True, log=print):
+             out_dir, prefix, fmt, want_7zip=(), offline=True, log=print):
     """fmt: 'tar.gz' | 'zip' | 'both'；want_7zip: 内置便携 7-Zip 的平台集合；
        offline: True=内置二进制(离线可跑) / False=轻量包(目标机联网)"""
     if not (linux_on or windows_on):
@@ -731,12 +553,11 @@ def generate(repo_root, linux_on, windows_on, arch, auth, pub,
 
     log(f"包名: {pkg_name}")
     assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
-                     want_7zip=want_7zip, offline=offline,
-                     with_transfer=with_transfer, log=log)
-    write_root_files(pkg_dir, linux_on, windows_on, with_transfer, log=log)
+                     want_7zip=want_7zip, offline=offline, log=log)
+    write_root_files(pkg_dir, linux_on, windows_on, log=log)
     write_pkg_readme(pkg_dir, linux_on, windows_on, bool(auth),
                      bool(pub and windows_on), want_7zip=want_7zip,
-                     offline=offline, with_transfer=with_transfer, log=log)
+                     offline=offline, log=log)
 
     made = []
     if fmt in ("tar.gz", "both"):
@@ -1082,12 +903,8 @@ if HAS_QT:
             h3.setSpacing(18)
             self.cb_7z_lin = QCheckBox("Linux 内置 7-Zip (+2.7MB)")
             self.cb_7z_win = QCheckBox("Windows 内置 7-Zip (+0.6MB)")
-            self.cb_transfer = QCheckBox("带传文件工具（双向+拖拽）")
-            self.cb_transfer.setChecked(True)
             h3.addWidget(self.cb_7z_lin)
             h3.addWidget(self.cb_7z_win)
-            h3.addSpacing(16)
-            h3.addWidget(self.cb_transfer)
             h3.addStretch(1)
             v.addLayout(h3)
             v.addWidget(_label(
@@ -1148,7 +965,6 @@ if HAS_QT:
                 self.cmb_fmt.currentIndex(),
                 bool(normalize_authkey(self.ed_auth.text())),
                 bool(self.ed_pub.toPlainText().strip()),
-                self.cb_transfer.isChecked(),
             ))
 
         def _snapshot_config(self):
@@ -1161,7 +977,6 @@ if HAS_QT:
                 "out_dir": self.ed_out.text().strip(),
                 "want_7z_linux": self.cb_7z_lin.isChecked(),
                 "want_7z_windows": self.cb_7z_win.isChecked(),
-                "with_transfer": self.cb_transfer.isChecked(),
                 "pubkey": self.ed_pub.toPlainText().strip(),
                 "remember_auth": self.cb_remember.isChecked(),
                 "authkey": (normalize_authkey(self.ed_auth.text())
@@ -1187,7 +1002,6 @@ if HAS_QT:
                 self.ed_out.setText(cfg["out_dir"])
             self.cb_7z_lin.setChecked(bool(cfg["want_7z_linux"]))
             self.cb_7z_win.setChecked(bool(cfg["want_7z_windows"]))
-            self.cb_transfer.setChecked(bool(cfg.get("with_transfer", True)))
             self.cb_remember.setChecked(bool(cfg["remember_auth"]))
             if cfg["pubkey"]:
                 self.ed_pub.setPlainText(cfg["pubkey"])
@@ -1201,7 +1015,6 @@ if HAS_QT:
                 w.currentIndexChanged.connect(self._on_choice_changed)
             self.cb_7z_lin.toggled.connect(self._on_choice_changed)
             self.cb_7z_win.toggled.connect(self._on_choice_changed)
-            self.cb_transfer.toggled.connect(self._on_choice_changed)
             self.ed_auth.textChanged.connect(self._on_choice_changed)
             self.ed_pub.textChanged.connect(self._on_choice_changed)
             self.ed_out.textChanged.connect(self._on_choice_changed)
@@ -1359,9 +1172,7 @@ if HAS_QT:
             try:
                 made = generate(REPO_ROOT, linux_on, windows_on, arch, auth, pub,
                                 out_dir, prefix, fmt, want_7zip=want_7zip,
-                                offline=offline,
-                                with_transfer=self.cb_transfer.isChecked(),
-                                log=self._log)
+                                offline=offline, log=self._log)
             except Exception as e:  # noqa: BLE001
                 self._log(f"[X] 生成失败: {e}")
                 self.lbl_status.setText("失败")

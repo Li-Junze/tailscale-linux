@@ -188,9 +188,20 @@ function Finish {
     }
     Write-Host '  (控制端需已装 Tailscale 客户端并在同一 tailnet)'
     Write-Host ''
-    Write-Host '  开机自启: Tailscale 服务 + sshd 均 Automatic (无需额外配置).'
+    Write-Host '  开机自启: Tailscale 服务 + sshd 均 Automatic (无需额外配置)。'
     Write-Host '  ⚠ 建议到 login.tailscale.com 把本机 Key expiry 设为 Disable, 否则过期需重跑.'
     Write-Host '  用完清洗: 以管理员运行 clean-windows.bat'
+    Write-Host ''
+    # ---------- 传文件: 只提示, 不引入任何新依赖 ----------
+    # ★ 被控端不装任何东西。前面已装好 OpenSSH Server, 控制端直接用
+    #   系统自带的 sftp / scp 往这台机器传文件即可。
+    Write-Host '  ── 想把文件发到这台机器? ──'
+    Write-Host '     在你自己的(控制端)电脑上执行, 把下面的 IP 换成本机的:'
+    Write-Host ''
+    Write-Host "       scp -r 文件或目录 $env:USERNAME@$($ip):./"
+    Write-Host ''
+    Write-Host '     文件会落在本机 C:\Users\'$env:USERNAME'\ 下。'
+    Write-Host '     (控制端若提示输密码, 本方案用的是公钥免密, 直接回车即可)'
 }
 
 # ---- 主流程: 包一层 try/catch, 保证无论成功/报错窗口都不秒关 ----
