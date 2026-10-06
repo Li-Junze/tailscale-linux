@@ -8,8 +8,9 @@
 **这两个文件不入库**（已在 `.gitignore`），获取方式二选一：
 
 ## 方式 A：下载开箱即用完整包（推荐）
-到本仓库的 **Releases** 页面下载 `tailscale-linux-offline-full.tar.gz`，
-它已包含预置好的二进制，解压即用，无需联网。
+到本仓库的 **Releases** 页面下载 `tailscale-remote-full.tar.gz`（组合完整包，
+已同时包含 Linux 二进制与 Windows MSI），解压即用，无需联网。
+若只需 Linux 部分，也可单独下载 `tailscale-linux-offline-full.tar.gz`。
 
 ## 方式 B：自己预置（需一台有网的机器）
 在本目录执行：
