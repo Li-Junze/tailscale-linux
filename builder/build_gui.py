@@ -31,15 +31,43 @@ import zipfile
 import datetime
 import subprocess
 
+
+def _hide_console():
+    """隐藏 Windows 控制台窗口(GUI 背后不该有个黑框)。
+    ★ 必须在 QApplication 创建之前调用, 且要在 import PyQt5 之前尝试。
+    ★ .bat 启动时会带一个 cmd 窗口; 用 pythonw 或 DETACHED_PROCESS 都能去掉。"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        # 6 = SW_HIDE: 让 console 窗口隐藏而不是关掉(关掉会连带影响 GUI)
+        ctypes.windll.user32.ShowWindow(
+            ctypes.windll.kernel32.GetConsoleWindow(), 0)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        # 让任务栏/Alt+Tab 里也不再显示这个 python 窗口
+        ctypes.windll.user32.SetWindowPos(
+            ctypes.windll.kernel32.GetConsoleWindow(), -1, 0, 0, 0, 0x0001)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+_hide_console()
+
 try:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
         QGroupBox, QComboBox, QLineEdit,
         QPlainTextEdit, QPushButton, QFileDialog, QMessageBox, QLabel,
         QCheckBox, QFrame, QScrollArea, QButtonGroup,
+        # 设备管理表格
+        QAbstractItemView, QTableWidget, QTableWidgetItem, QHeaderView,
     )
-    from PyQt5.QtCore import Qt, QUrl
-    from PyQt5.QtGui import QFont, QDesktopServices
+    # ★ pyqtSignal / QTimer 是"子线程回主线程"的必需品, 漏了会在
+    #   import 之后的类定义处直接 NameError -> 表现为"双击就闪退"。
+    from PyQt5.QtCore import Qt, QUrl, QTimer, pyqtSignal
+    from PyQt5.QtGui import QFont, QDesktopServices, QGuiApplication, QColor
     HAS_QT = True
 except Exception:  # noqa: BLE001
     HAS_QT = False
@@ -156,6 +184,65 @@ def normalize_authkey(s):
         if s.lower().startswith(pfx.lower()):
             s = s[len(pfx):].strip()
     return s
+
+
+# ============================================================ 调试日志
+DEBUG_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "debug.log")
+_LOG_FH = None
+_LOG_DAY = None
+
+
+def _log_open():
+    """打开按天轮转的调试日志。失败只返回 None, 绝不抛异常。"""
+    global _LOG_FH, _LOG_DAY
+    try:
+        import datetime
+        day = datetime.date.today().strftime("%Y%m%d")
+        if _LOG_FH is not None and _LOG_DAY == day:
+            return _LOG_FH
+        if _LOG_FH is not None:
+            try:
+                _LOG_FH.close()
+            except Exception:  # noqa: BLE001
+                pass
+        path = (DEBUG_LOG_PATH if _LOG_FH is None
+                else DEBUG_LOG_PATH.replace(".log", f".{day}.log"))
+        _LOG_FH = open(path, "a", encoding="utf-8")
+        _LOG_DAY = day
+        return _LOG_FH
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def dbg(msg):
+    """写一行调试日志(带时间)。同时尽量打到 stderr。永不抛异常。"""
+    try:
+        import datetime
+        ts = datetime.datetime.now().strftime("%H:%M:%S")
+        line = f"[{ts}] {msg}"
+        fh = _log_open()
+        if fh is not None:
+            fh.write(line + "\n")
+            fh.flush()
+        try:
+            sys.stderr.write(line + "\n")
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def dbg_exc(tag):
+    """记录当前异常堆栈。"""
+    try:
+        import traceback
+        dbg(f"--- EXCEPTION at {tag} ---")
+        dbg(traceback.format_exc())
+    except Exception:  # noqa: BLE001
+        pass
+
 
 
 # ------------------------------------------------------------ 配置记忆
@@ -650,22 +737,21 @@ def _zip_dir(d, log=None):
     return out
 
 
-def list_ts_targets():
-    """列出 tailnet 里的设备(排除自己)。"""
+def list_ts_targets(include_self=True):
+    """列出 tailnet 里的设备。
+
+    include_self=True 时把本机也列出来(标记 is_self), 因为用户需要看到并
+    管理自己这台机器(比如退出 tailnet)。发送时才过滤掉本机。
+    """
     ts = _find_ts()
     if not ts:
         return []
+    my = set(_ts_my_ips())
     try:
         r = subprocess.run([ts, "status"], capture_output=True, text=True,
                            timeout=20)
     except Exception:  # noqa: BLE001
         return []
-    me = ""
-    try:
-        me = subprocess.run([ts, "status", "--self"], capture_output=True,
-                            text=True, timeout=10).stdout.split()[0]
-    except Exception:  # noqa: BLE001
-        pass
     out = []
     for line in r.stdout.splitlines():
         parts = line.split()
@@ -674,16 +760,63 @@ def list_ts_targets():
         ip = parts[0]
         if not (ip.count(".") == 3 and ip.split(".")[0] == "100"):
             continue
-        if ip == me:
+        is_self = ip in my
+        if is_self and not include_self:
             continue
         osname = ""
         for pt in parts:
             if pt in ("windows", "linux", "macOS", "iOS", "android"):
                 osname = pt
                 break
-        out.append({"ip": ip, "name": parts[1], "os": osname,
-                    "offline": "offline" in line.lower()})
+        name = parts[1]
+        if is_self:
+            name = f"{name}  (本机)"
+        out.append({"ip": ip, "name": name, "os": osname,
+                    "offline": "offline" in line.lower(), "is_self": is_self})
     return out
+
+
+def _ts_my_ips():
+    """本机的所有 100.x.x.x(用于判断"选中的是不是我")。失败返回空表。"""
+    ts = _find_ts()
+    if not ts:
+        return []
+    out = []
+    try:
+        for flag in ("-4", "-6"):
+            r = subprocess.run([ts, "ip", flag], capture_output=True,
+                               text=True, timeout=10)
+            for ln in (r.stdout or "").split():
+                if ln.count(".") == 3 or ":" in ln:
+                    out.append(ln)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def ts_logout_self():
+    """把【本机】从 tailnet 摘掉(仅限自己)。返回 (ok, msg)。"""
+    ts = _find_ts()
+    if not ts:
+        return False, "本机没有 tailscale 客户端"
+    dbg("[ts] logout self")
+    try:
+        r = subprocess.run([ts, "logout"], capture_output=True, text=True,
+                           timeout=30)
+    except Exception as e:  # noqa: BLE001
+        dbg_exc("ts logout")
+        return False, f"执行失败: {e}"
+    if r.returncode == 0:
+        return True, (r.stdout or r.stderr or "").strip() or "本机已退出"
+    return False, (r.stderr or r.stdout or f"退出码 {r.returncode}").strip()
+
+
+def ts_admin_url(ip=""):
+    """Tailscale 管理后台里删除节点的地址。
+    ★ tailscale CLI 只能 logout 自己; 删除【别的】设备必须去后台点。
+      所以这里给出直达链接, 并把要处理的 IP 复制好, 让用户粘贴到后台搜索框。"""
+    base = "https://login.tailscale.com/admin/machines"
+    return base if not ip else base
 
 
 class _SendTask:
@@ -749,13 +882,21 @@ class _SendTask:
 
         self.log("执行: " + shown)
         self.log("")
+        dbg(f"[send] spawn: {shown}")
+        spawn_kw = dict(stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        stdin=subprocess.DEVNULL, text=True,
+                        encoding="utf-8", errors="replace", bufsize=1)
+        if os.name == "nt":
+            # ★ CREATE_NO_WINDOW: 绝不给子进程弹黑框
+            spawn_kw["creationflags"] = (
+                subprocess.CREATE_NO_WINDOW
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
         try:
-            self.proc = subprocess.Popen(
-                argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
-                errors="replace", bufsize=1)
+            self.proc = subprocess.Popen(argv, **spawn_kw)
         except Exception as e:  # noqa: BLE001
+            dbg_exc("send Popen")
             return False, f"启动失败: {e}"
+        dbg(f"[send] spawned pid={getattr(self.proc, 'pid', '?')}")
 
         import time as _t
         start = _t.time()
@@ -876,6 +1017,11 @@ def _label(text, obj=""):
 
 if HAS_QT:
     class MainWindow(QMainWindow):
+        # ★ 子线程 -> 主线程的唯一通道。
+        #   在子线程里直接碰 QWidget/QMessageBox 是 PyQt5 崩溃的头号原因,
+        #   所以子线程只发这个信号, 一切 UI 操作都在主线程做。
+        done_signal = pyqtSignal(object, object, object)   # (tag, ok, msg)
+
         def __init__(self):
             super().__init__()
             self.setWindowTitle("Tailscale-Remote  工具箱")
@@ -886,6 +1032,8 @@ if HAS_QT:
             if app is not None:
                 app.setFont(QFont("Microsoft YaHei", 13))
             self.cfg = load_config()    # 配置(记忆/历史) 先加载, UI 里要用
+            # 子线程完成的信号 -> 主线程统一处理 UI (线程安全的关键)
+            self.done_signal.connect(self._on_done_signal)
             self._build_ui()
             self._restore_config()      # 恢复上次选择(含记忆的密钥)
             self._scan_existing_key()
@@ -1289,6 +1437,39 @@ if HAS_QT:
 
             self.lbl_stip = _label("", "tip")
             v.addWidget(self.lbl_stip)
+
+            # --- 设备管理表: 复制 IP / 删除节点 ---
+            self.tbl_peers = QTableWidget(0, 4)
+            self.tbl_peers.setHorizontalHeaderLabels(
+                ["IP (双击复制)", "名称", "系统", "状态"])
+            self.tbl_peers.verticalHeader().setVisible(False)
+            self.tbl_peers.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.tbl_peers.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.tbl_peers.setMaximumHeight(190)
+            hh = self.tbl_peers.horizontalHeader()
+            hh.setSectionResizeMode(0, QHeaderView.Stretch)
+            hh.setSectionResizeMode(1, QHeaderView.Stretch)
+            self.tbl_peers.doubleClicked.connect(self._on_tbl_dblclick)
+            v.addWidget(self.tbl_peers)
+
+            h3 = QHBoxLayout()
+            h3.setSpacing(10)
+            b_cp = QPushButton("复制选中 IP")
+            b_cp.setObjectName("ghost")
+            b_cp.clicked.connect(self.on_copy_ip)
+            h3.addWidget(b_cp)
+            b_del = QPushButton("删除该节点")
+            b_del.setObjectName("ghost")
+            b_del.clicked.connect(self.on_delete_peer)
+            h3.addWidget(b_del)
+            b_get = QPushButton("复制取文件命令")
+            b_get.setObjectName("ghost")
+            b_get.clicked.connect(self.on_copy_getcmd)
+            h3.addWidget(b_get)
+            h3.addStretch(1)
+            self.lbl_manage = _label("", "hint")
+            h3.addWidget(self.lbl_manage)
+            v.addLayout(h3)
             self.form_send.addWidget(g)
 
             # --- ② 发什么 ---
@@ -1423,7 +1604,154 @@ if HAS_QT:
                     if keep in (self.cmb_speer.itemText(i) or ""):
                         self.cmb_speer.setCurrentIndex(i)
                         break
+            self._fill_peer_table(peers)
             self.lbl_status.setText(f"找到 {len(peers)} 台设备")
+            dbg(f"[peers] refreshed, {len(peers)} devices")
+
+        def _fill_peer_table(self, peers):
+            """把设备列表填进表格。"""
+            try:
+                self.tbl_peers.setRowCount(0)
+                for i, pr in enumerate(peers):
+                    self.tbl_peers.insertRow(i)
+                    st = "离线" if pr["offline"] else "在线"
+                    if pr.get("is_self"):
+                        st = "本机"
+                    for col, txt in enumerate(
+                            [pr["ip"], pr["name"], pr["os"] or "-", st]):
+                        it = QTableWidgetItem(txt)
+                        if col == 3:
+                            if pr.get("is_self"):
+                                it.setForeground(QColor("#2F6FED"))
+                            elif not pr["offline"]:
+                                it.setForeground(QColor("#1B7F3B"))
+                        self.tbl_peers.setItem(i, col, it)
+            except Exception:  # noqa: BLE001
+                dbg_exc("fill_peer_table")
+
+        def _selected_peer(self):
+            """取表格里选中那行的设备信息(没有就回退到下拉框)。"""
+            r = self.tbl_peers.currentRow()
+            if r >= 0:
+                it = self.tbl_peers.item(r, 0)
+                ip = it.text() if it else ""
+                if ip:
+                    return {"ip": ip,
+                            "name": (self.tbl_peers.item(r, 1).text()
+                                      if self.tbl_peers.item(r, 1) else ""),
+                            "os": (self.tbl_peers.item(r, 2).text()
+                                   if self.tbl_peers.item(r, 2) else "")}
+            return None
+
+        def _clip(self, text, what):
+            """复制到剪贴板并给视觉反馈。"""
+            try:
+                QGuiApplication.clipboard().setText(text)
+                self.lbl_manage.setText(f"✓ 已复制{what}: {text}")
+                self.lbl_status.setText(f"已复制{what}")
+                dbg(f"[copy] {what} = {text}")
+                return True
+            except Exception:  # noqa: BLE001
+                dbg_exc("clipboard")
+                self.lbl_manage.setText(f"[X] 复制失败, 请手动复制: {text}")
+                return False
+
+        def _on_tbl_dblclick(self, idx):
+            r = idx.row()
+            it = self.tbl_peers.item(r, 0)
+            if not it:
+                return
+            self._clip(it.text(), "IP")
+            if it.text() in _ts_my_ips():
+                self.lbl_manage.append("  (本机, 不能作为发送目标)")
+                return
+            # 双击同时选中它作为发送目标
+            for i in range(self.cmb_speer.count()):
+                d = self.cmb_speer.itemData(i)
+                if isinstance(d, dict) and d.get("ip") == it.text():
+                    self.cmb_speer.setCurrentIndex(i)
+                    break
+
+        def on_copy_ip(self):
+            pr = self._selected_peer() or {"ip": self.current_peer_ip()}
+            ip = pr.get("ip", "")
+            if not ip:
+                QMessageBox.warning(self, "没选中", "请先在表格里点一行")
+                return
+            self._clip(ip, "IP")
+
+        def on_copy_getcmd(self):
+            """一键复制『让对方取文件』的命令。"""
+            cmd = "tailscale file get ."
+            self._clip(cmd, "取文件命令")
+
+        def on_delete_peer(self):
+            """删除设备节点。
+
+            ★ 事实: tailscale CLI 只能 logout【自己】, 删除别的设备必须去
+              Tailscale 管理后台点。所以这里做两件事:
+              1) 选中的是本机 -> 直接 logout, 一步到位
+              2) 选中的是别的设备 -> 复制 IP + 打开后台 machines 页(可搜索)
+            """
+            pr = self._selected_peer() or {"ip": self.current_peer_ip(),
+                                            "name": ""}
+            ip = pr.get("ip", "")
+            if not ip:
+                QMessageBox.warning(self, "没选中", "请先在表格里点一行设备")
+                return
+            nm = pr.get("name", "")
+
+            # ---- 本机 ----
+            if ip in _ts_my_ips():
+                r = QMessageBox.question(
+                    self, "退出本机",
+                    f"这 IP ({ip}) 是【你自己这台电脑】。\n\n"
+                    "确定要让本机退出 tailnet 吗?\n"
+                    "退出后本机的 Tailscale 通道会断开, 需要重新授权才能用。")
+                if r != QMessageBox.Yes:
+                    return
+                dbg(f"[delete] logout SELF ip={ip}")
+                ok, msg = ts_logout_self()
+                if ok:
+                    self.lbl_manage.setText("✓ 本机已退出 tailnet")
+                    self.lbl_status.setText("本机已退出")
+                    QMessageBox.information(self, "已退出",
+                                            f"本机已退出 tailnet。\n\n{msg}")
+                    self.on_refresh_peers()
+                else:
+                    dbg(f"[delete] logout FAILED msg={msg}")
+                    self.lbl_manage.setText(f"[X] 退出失败: {msg}")
+                    QMessageBox.warning(self, "退出失败", msg)
+                return
+
+            # ---- 别的设备: 只能去后台删 ----
+            r = QMessageBox.question(
+                self, "删除其他设备",
+                f"要移除这台设备吗?\n\n"
+                f"  名称: {nm or '(未知)'}\n"
+                f"  IP  : {ip}\n\n"
+                "tailscale 命令行【只能退出本机】, 删除别的设备要在管理后台点。\n"
+                "我现在帮你做两件事:\n"
+                "  1. 复制该 IP  (方便你在后台搜索框粘贴)\n"
+                "  2. 打开 Tailscale 后台的 machines 页\n\n"
+                "确定继续吗?")
+            if r != QMessageBox.Yes:
+                return
+            self._clip(ip, "IP")
+            dbg(f"[delete] open admin console for {ip}")
+            try:
+                QDesktopServices.openUrl(QUrl(ts_admin_url()))
+            except Exception:  # noqa: BLE001
+                dbg_exc("open admin url")
+            self.lbl_manage.setText(
+                f"已在后台打开, 搜索 {ip} 点 ... → Delete 即可")
+            self.lbl_status.setText("已跳转后台")
+            QMessageBox.information(
+                self, "已打开管理后台",
+                f"IP 已复制: {ip}\n\n"
+                "在后台的 machines 列表里搜索这个 IP, "
+                "点右侧 ... → Delete 即可移除。\n\n"
+                "后台地址: " + ts_admin_url())
 
         def current_peer_ip(self):
             d = self.cmb_speer.currentData()
@@ -1431,7 +1759,10 @@ if HAS_QT:
                 return d.get("ip", "")
             if isinstance(d, str):
                 return d
-            return (self.cmb_speer.currentText() or "").split()[0].strip()
+            # ★ 空下拉框 / 空文本时 .split() 会返回 [] -> [0] 越界。
+            #   这在"还没点刷新列表"时就会命中。
+            parts = (self.cmb_speer.currentText() or "").split()
+            return parts[0].strip() if parts else ""
 
         # ---------- 发送 ----------
         def on_send(self):
@@ -1443,6 +1774,14 @@ if HAS_QT:
                 return
             if not self.send_files:
                 QMessageBox.warning(self, "没有文件", "请先把要发的文件拖进来")
+                return
+            if ip in _ts_my_ips():
+                QMessageBox.warning(
+                    self, "目标是自己",
+                    f"{ip} 是本机的 IP。\n\n"
+                    "Taildrop 需要发给【别的】设备。\n"
+                    "请在表格里选一台别的机器。")
+                dbg(f"[send] blocked: target is self ({ip})")
                 return
             method = "scp" if self.cmb_smethod.currentIndex() == 1 else "taildrop"
             hist = [h for h in self.cfg.get("send_history", [])
@@ -1470,20 +1809,38 @@ if HAS_QT:
                              daemon=True).start()
 
         def _send_worker(self, t):
-            ok, msg = t.run()
-            self._send_done(ok, msg)
+            """子线程: 只跑传输, 结果通过信号回主线程。绝不碰任何 UI 控件。
 
-        def _send_done(self, ok, msg):
-            def ui():
+            ★ 这里必须把【所有】异常都吃掉并转成信号: 子线程里任何
+              未捕获异常都会导致进程静默退出, 表现为"发个文件程序就没了"。
+            """
+            ok, msg = False, "发送线程未知错误"
+            try:
+                ok, msg = t.run()
+            except BaseException as e:            # noqa: BLE001
+                dbg_exc("send worker")
+                msg = f"发送失败: {type(e).__name__}: {e}"
+            finally:
+                try:
+                    self.done_signal.emit("send", ok, msg)
+                except BaseException:              # noqa: BLE001
+                    dbg_exc("emit send signal")
+
+        def _on_done_signal(self, tag, ok, msg):
+            """主线程: 收到子线程结果, 这里才允许动 UI。"""
+            dbg(f"[ui] done signal tag={tag} ok={ok} msg={msg}")
+            try:
+                if tag != "send":
+                    return
                 self.btn_send.setEnabled(True)
                 self.btn_stop.setEnabled(False)
-                self.lbl_status.setText(msg)
+                self.lbl_status.setText(str(msg))
                 if ok:
-                    extra = ("\n\n让对方在他的机器上执行:  tailscale file get"
+                    extra = ("\n\n让对方在他的机器上执行:\n    tailscale file get ."
                              if self.cmb_smethod.currentIndex() == 0 else "")
-                    QMessageBox.information(self, "发送完成", msg + extra)
-            QApplication.instance().processEvents()
-            ui()
+                    QMessageBox.information(self, "发送完成", str(msg) + extra)
+            except Exception:  # noqa: BLE001
+                dbg_exc("on_done_signal")
 
         def on_stop(self):
             if self._send_task:
@@ -1788,16 +2145,105 @@ if HAS_QT:
                     pass
 
 
+def _install_excepthook():
+    """全局未捕获异常钩子: 写日志 + 提示用户, 绝不静默死掉。"""
+    def _hook(exc_type, exc_val, exc_tb):
+        try:
+            import traceback
+            tb = "".join(traceback.format_exception(exc_type, exc_val, exc_tb))
+            dbg("=== UNCAUGHT EXCEPTION ===")
+            dbg(tb)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if HAS_QT:
+                from PyQt5.QtWidgets import QApplication, QMessageBox
+                QMessageBox.critical(
+                    None, "程序出错",
+                    "出了个未预期的问题, 但程序不会退出。\n\n"
+                    "详细信息已写到:\n" + DEBUG_LOG_PATH +
+                    "\n\n(通常是拖拽了失效的路径, 或目标机状态变了)")
+        except Exception:  # noqa: BLE001
+            pass
+    sys.excepthook = _hook
+    try:
+        import threading
+        def _thook(args):
+            if args.exc_type is SystemExit:
+                return
+            _hook(args.exc_type, args.exc_value, args.exc_traceback)
+        threading.excepthook = _thook      # Python 3.8+
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clear_alive_sentinel():
+    """删掉启动器放的哨兵文件 —— 它的存在表示"GUI 没起来"。
+
+    静默启动(pythonw / .vbs)拿不到任何 stderr, 出错时用户只看到
+    "什么都没发生"。这个哨兵就是启动器的失败判据。
+    """
+    for name in (".toolbox-alive",):
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+
+def _fail_fast(msg, detail=""):
+    """GUI 起不来时: 写日志 + 弹窗(若可能) + 非零退出。
+
+    静默启动下没有控制台, 所以必须靠弹窗/日志告知, 不能静默退出。
+    """
+    try:
+        import datetime
+        path = DEBUG_LOG_PATH
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n=== FATAL {datetime.datetime.now():%H:%M:%S} ===\n"
+                    f"{msg}\n{detail}\n")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            None, f"{msg}\n\n{detail}\n\n细节: {DEBUG_LOG_PATH}",
+            "Tailscale 工具箱 - 无法启动", 0x10)
+    except Exception:  # noqa: BLE001
+        pass
+    sys.exit(1)
+
+
 def main():
+    _install_excepthook()
+    dbg("=== application start ===")
+    dbg(f"python {sys.version.split()[0]}  pyqt={HAS_QT}  os={os.name}  "
+        f"exe={sys.executable}")
     if not HAS_QT:
-        print("PyQt5 未安装，无法启动图形界面。请先: pip install PyQt5")
-        print("(核心打包逻辑仍可无头调用: from build_gui import generate)")
-        sys.exit(1)
-    app = QApplication(sys.argv)
-    app.setFont(QFont("Microsoft YaHei", 13))
-    w = MainWindow()
-    w.show()
-    sys.exit(app.exec_())
+        dbg("FATAL: PyQt5 不可用")
+        _fail_fast(
+            "没有安装 PyQt5, 图形界面无法启动。",
+            f"请执行:\n    {sys.executable} -m pip install PyQt5")
+    try:
+        app = QApplication(sys.argv)
+        app.setFont(QFont("Microsoft YaHei", 13))
+        w = MainWindow()
+        w.show()
+    except BaseException:                     # noqa: BLE001
+        dbg_exc("GUI 初始化")
+        _fail_fast("图形界面初始化失败。", "详见下方日志里的堆栈。")
+        return
+    # 走到这说明 GUI 真的起来了 -> 撤掉哨兵
+    _clear_alive_sentinel()
+    dbg("GUI up, sentinel cleared")
+    try:
+        rc = app.exec_()
+    except BaseException:                     # noqa: BLE001
+        dbg_exc("app.exec_")
+        rc = 1
+    dbg(f"=== application exit rc={rc} ===")
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
