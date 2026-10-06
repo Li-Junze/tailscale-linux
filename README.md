@@ -22,7 +22,7 @@
 ① 目标环境   Linux / Windows / 双端
 ② 运行模式   离线（自带二进制，67MB）/ 轻量（不带，几十KB）
 ③ 密钥       贴 authkey；点一下自动生成 SSH 密钥对
-④ 打包选项   格式 / 输出目录 / 便携 7-Zip / 要不要带传文件工具
+④ 打包选项   格式 / 输出目录 / 要不要内置便携 7-Zip
 ```
 
 > 所有选择都会被**记住**（存到 `~/.tailscale_remote/generator_config.json`），
@@ -71,13 +71,6 @@ tailscale-remote/
 │   ├── README.md              #   Windows 详细说明
 │   ├── assets/                #   预置 Tailscale MSI（不入库）
 │   └── keys/                  #   authkey + 控制端公钥临时存放点
-│
-├── tools/                     ★ 点对点文件传输（双向）
-│   ├── p2p.py                 #   核心 CLI: serve / send / fetch
-│   ├── dragdrop-send.bat      #   Windows 拖拽发送入口
-│   ├── receive-files.bat      #   Windows 一键接收入口
-│   ├── 收文件.sh              #   Linux / macOS 一键接收
-│   └── README.md              #   传文件详细说明
 │
 └── builder/                   ★ 配置生成器
     ├── ★运行生成器.bat         #   双击启动（醒目入口）
@@ -139,33 +132,23 @@ bash clean.sh -y         # 非交互
 
 ---
 
-## 传文件（双向，零依赖）
+## 传文件（零新增依赖）
 
-建好通道后传文件**不用 scp / rsync / sftp**，只靠 python3 标准库。
+建好通道后传文件**不需要装任何东西** —— 直接用系统自带的 `scp`：
 
 ```bash
-# 被控端：启动接收（Windows 双击 接收文件.bat / Linux bash 收文件.sh）
-python tools/p2p.py serve --gui
-#   屏幕显示: 100.x.x.x 的 IP + 6 位口令, 收件在 程序/文件传输/inbox/
-
-# 控制端：送文件
-python tools/p2p.py send 100.x.x.x 报告.pdf
-python tools/p2p.py send 100.x.x.x -a 整个目录      # 自动打包 zip
-
-# 控制端：从对方取文件（反向）
-python tools/p2p.py fetch 100.x.x.x -l               # 先列清单
-python tools/p2p.py fetch 100.x.x.x 截图.png
+# 在你自己的(控制端)电脑上执行, IP 换成被控端屏幕上显示的那个
+scp -r 文件或目录 用户名@100.x.x.x:~/
 ```
 
-**Windows 拖拽**：把文件/文件夹直接拖到 `dragdrop-send.bat` 图标上，按提示填 IP 和口令。
+- **Linux 被控端**：走 Tailscale 内置 SSH（端口 22，免密、无需 sshd）
+- **Windows 被控端**：走已装好的 OpenSSH Server（公钥免密）
 
-| 依赖 | 说明 |
-|---|---|
-| 被控端 `serve` | **python3 本体即可**（socket/threading/zipfile 全内置） |
-| `--gui` 弹窗 | +tkinter，**纯可选**；精简 Linux 缺了自动降级命令行，收文件不受影响 |
+`deploy` 跑完后，屏幕会直接把这条命令打印给你（连文件路径都填好了），
+所以你不需要记任何东西。
 
-安全：默认 6 位口令校验、路径越界拒绝、文件名净化、`.part` 临时文件原子改名、同名自动加序号。
-详见 [tools/README.md](tools/README.md)。
+> Linux 若提示 `scp: command not found`，装一下客户端即可：
+> `apt install openssh-client` / `yum install openssh-clients` / `apk add openssh-client`
 
 ---
 

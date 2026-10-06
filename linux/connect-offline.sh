@@ -298,13 +298,32 @@ if [ "$role" = "2" ]; then
   echo "   登录用户名        : ${REAL_USER}"
   echo "   生成/更新 key 页   : ${KEYS_URL}"
   echo ""
-  echo "   重启后自启: 已尝试写入 crontab @reboot (见上方状态)"
-  echo "   用完清洗  : bash clean.sh   (一键抹除本机所有连接痕迹)"
-  echo "   ★ 重要: 到 login.tailscale.com 把本机『Key expiry』设为 Disable,"
-  echo "     否则密钥过期后需重跑本脚本重新授权一次。"
-  echo ""
-  echo "================================================================"
-  read -r -p "按回车退出" _; exit 0
+echo "   重启后自启: 已尝试写入 crontab @reboot (见上方状态)"
+    echo "   用完清洗  : bash clean.sh   (一键抹除本机所有连接痕迹)"
+    echo "   ★ 重要: 到 login.tailscale.com 把本机『Key expiry』设为 Disable,"
+    echo "     否则密钥过期后需重跑本脚本重新授权一次。"
+    echo ""
+
+    # ---------- 传文件: 只提示, 不引入任何新依赖 ----------
+    # ★ 原则: 被控端不装任何东西。传文件用系统自带的 scp/sftp,
+    #   Linux 绝大多数发行版都自带 openssh-client; 万一没有, 给出安装提示。
+    echo "   ── 想把文件发到这台机器? ──"
+    if command -v scp >/dev/null 2>&1; then
+      echo "     在你自己的电脑上执行(把 100.x.x.x 换成 ${SELF_IP}):"
+      echo ""
+      echo "       scp -r 文件或目录 ${REAL_USER}@${SELF_IP}:~/"
+      echo ""
+      echo "     文件会落在本机 ~/${REAL_USER}/ 下。"
+    else
+      echo "     [!] 本机没找到 scp 命令(极少见)。装一下即可:"
+      echo "       Debian/Ubuntu : apt install openssh-client"
+      echo "       CentOS/RHEL   : yum install openssh-clients"
+      echo "       Alpine        : apk add openssh-client"
+      echo "     装完同样用 scp 往这台机器传文件。"
+    fi
+    echo ""
+    echo "============================================================"
+    read -r -p "按回车退出" _; exit 0
 fi
 
 # ---------- [4/4] 主控端: 等目标机入网并连接 ----------
