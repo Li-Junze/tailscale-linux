@@ -46,3 +46,7 @@ toolbox-launch-failed.log
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 重构期备份
+builder/*.bak*
+*.bak
