@@ -153,22 +153,53 @@ function Enable-SSHServer {
     # 目标: 对方重启电脑后什么都不用点, Tailscale 自动入网、sshd 自动监听。
     Write-Host '      [自启] 固化开机自启动 ...'
     foreach ($svc in @('sshd', 'ssh-agent', 'tailscale')) {
-        if (Get-Service $svc -ErrorAction SilentlyContinue) {
-            try {
-                Set-Service $svc -StartupType Automatic
-                Start-Service $svc -ErrorAction SilentlyContinue
-                Write-Host "      [OK] 服务 $svc → Automatic (开机即运行)"
-            } catch {
-                Write-Host "      [!] $svc 自启设置失败: $_" -ForegroundColor DarkYellow
-            }
+        if (-not (Get-Service $svc -ErrorAction SilentlyContinue)) { continue }
+        # ★ Set / Start 分成两次 try: 之前合成一个 try, 只要 Start 抛一次异常,
+        #   哪怕启动类型已经设好了也会被打成 [!], 看起来像没配上。
+        $setErr = ''
+        try { Set-Service $svc -StartupType Automatic -ErrorAction Stop }
+        catch { $setErr = $_.Exception.Message }
+        try { Start-Service $svc -ErrorAction SilentlyContinue } catch { }
+        if ($setErr) {
+            Write-Host "      [!] 服务 $svc 自启设置失败: $setErr" -ForegroundColor DarkYellow
+        } else {
+            Write-Host "      [OK] 服务 $svc -> Automatic (开机即运行)"
         }
     }
+    # ---- 开机自动 tailscale up (延迟 30s, 等网络就绪) ----
+    # ★ 血泪教训: schtasks /TR 的值里如果带空格路径, 必须把内层引号写成 \" ,
+    #   写成 "C:\Program Files\...\tailscale.exe" up 时 schtasks 会把 " up"
+    #   当成又一个参数 -> 报 "无效参数/选项 - 'Files\Tailscale\tailscale.exe up'"
+    #   (2026-10-06 真机截图复现)。
+    #   这里优先用 ScheduledTasks 模块(完全没有引号地狱), 失败再退回 schtasks。
+    $autoUpOk = $false
+    $autoUpMsg = ''
     try {
-        # 开机延迟 30s 自动 tailscale up —— 幂等, 用来把网络就绪后把连接拉起来
-        schtasks /Create /TN 'Tailscale-AutoUp' /TR "`"$TSExe`" up" /SC ONSTART /DELAY 0000:30 /RL HIGHEST /F 2>&1 | Out-Null
-        Write-Host '      [OK] 开机任务 Tailscale-AutoUp 已建 (重启后自动入网)'
+        $act = New-ScheduledTaskAction -Execute $TSExe -Argument 'up'
+        $trg = New-ScheduledTaskTrigger -AtStartup
+        $trg.Delay = 'PT30S'
+        $pri = New-ScheduledTaskPrincipal -UserId 'SYSTEM' `
+                   -LogonType ServiceAccount -RunLevel Highest
+        $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+                   -DontStopIfGoingOnBatteries -StartWhenAvailable
+        Register-ScheduledTask -TaskName 'Tailscale-AutoUp' -Action $act `
+            -Trigger $trg -Principal $pri -Settings $set -Force `
+            -ErrorAction Stop | Out-Null
+        $autoUpOk = $true
     } catch {
-        Write-Host "      [!] 建开机任务失败(不影响本次使用): $_" -ForegroundColor DarkYellow
+        $autoUpMsg = $_.Exception.Message
+        try {
+            # 兜底: 老写法, 但把内层引号正确转义为 \"
+            $tr = '\"' + $TSExe + '\" up'
+            schtasks /Create /TN 'Tailscale-AutoUp' /TR "$tr" /SC ONSTART `
+                /DELAY 0000:30 /RL HIGHEST /F 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { $autoUpOk = $true }
+        } catch { $autoUpMsg = "$autoUpMsg / $($_.Exception.Message)" }
+    }
+    if ($autoUpOk) {
+        Write-Host '      [OK] 开机任务 Tailscale-AutoUp 已建 (重启后自动入网)'
+    } else {
+        Write-Host "      [!] 建开机任务失败(不影响本次使用): $autoUpMsg" -ForegroundColor DarkYellow
     }
 }
 

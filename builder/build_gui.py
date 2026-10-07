@@ -48,51 +48,52 @@ except Exception:                                           # noqa: BLE001
 # ============================================================ 主题
 QSS = """
 /* ---------- 基础 ---------- */
-QWidget#page     { background:#F5F7FC; }
+QWidget#page     { background:#F3F6FC; }
 QFrame#card {
-    background:#FFFFFF; border:1px solid #E4E9F2; border-radius:16px;
-    border-left:4px solid #2563EB;
+    background:#FFFFFF; border:1px solid #E3E9F4; border-radius:18px;
+    border-left:5px solid #2563EB;
 }
 QFrame#head {
-    background:#FFFFFF; border:1px solid #E4E9F2; border-radius:16px;
-    border-left:6px solid #2563EB;
+    background:qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                               stop:0 #1E3A8A, stop:0.55 #2563EB, stop:1 #4F8DF7);
+    border:none; border-radius:20px;
 }
-QFrame#foot      { background:#FFFFFF; border:1px solid #E4E9F2; border-radius:16px; }
+QFrame#foot      { background:#FFFFFF; border:1px solid #E3E9F4; border-radius:18px; }
 
-QLabel#title     { font-size:31px; font-weight:bold; color:#0B1220; background:transparent; }
-QLabel#subtitle  { font-size:17px; color:#5B6B84; background:transparent; }
-QLabel#cardTitle { font-size:23px; font-weight:bold; color:#0B1220; background:transparent; }
-QLabel#cardSub   { font-size:17px; color:#5B6B84; background:transparent; }
-QLabel#hint      { font-size:17px; color:#5B6B84; background:transparent; }
-QLabel#ok        { font-size:17px; color:#15803D; background:transparent; font-weight:bold; }
-QLabel#bad       { font-size:17px; color:#DC2626; background:transparent; font-weight:bold; }
+QLabel#title     { font-size:40px; font-weight:bold; color:#FFFFFF; background:transparent; }
+QLabel#subtitle  { font-size:20px; color:#D7E5FE; background:transparent; }
+QLabel#cardTitle { font-size:28px; font-weight:bold; color:#0B1220; background:transparent; }
+QLabel#cardSub   { font-size:19px; color:#64748B; background:transparent; }
+QLabel#hint      { font-size:19px; color:#64748B; background:transparent; }
+QLabel#ok        { font-size:19px; color:#15803D; background:transparent; font-weight:bold; }
+QLabel#bad       { font-size:19px; color:#DC2626; background:transparent; font-weight:bold; }
 QLabel#sum {
-    background:#EFF6FF; border:1px solid #BFDBFE; border-radius:12px;
-    padding:15px 18px; font-size:18px; color:#1E3A8A;
+    background:#EFF6FF; border:1px solid #BFDBFE; border-radius:14px;
+    padding:18px 20px; font-size:20px; color:#1E3A8A;
 }
-QLabel#field     { font-size:19px; color:#0B1220; background:transparent; font-weight:bold; }
+QLabel#field     { font-size:22px; color:#0B1220; background:transparent; font-weight:bold; }
+/* ★ 半透明必须用 rgba(): Qt QSS 不认 #RRGGBBAA（会把 alpha 当 R 通道, 渲染成实心块） */
 QLabel#pill {
-    background:#ECFDF5; color:#047857; border:1px solid #A7F3D0;
-    border-radius:11px; padding:6px 12px; font-size:16px; font-weight:bold;
-    background:transparent;
+    background:rgba(236,253,245,1); color:#047857; border:1px solid #A7F3D0;
+    border-radius:12px; padding:8px 14px; font-size:18px; font-weight:bold;
 }
 
 /* ---------- 输入控件 ---------- */
 QLineEdit, QPlainTextEdit, QComboBox {
-    background:#FFFFFF; border:2px solid #D5DEEB; border-radius:11px;
-    padding:12px 14px; font-size:19px; color:#0B1220;
+    background:#FFFFFF; border:2px solid #D3DCEA; border-radius:13px;
+    padding:14px 16px; font-size:22px; color:#0B1220;
     selection-background-color:#2563EB; selection-color:#FFFFFF;
 }
-QLineEdit:hover, QPlainTextEdit:hover, QComboBox:hover { border-color:#A9BBDA; }
+QLineEdit:hover, QPlainTextEdit:hover, QComboBox:hover { border-color:#A3B7D8; }
 QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus { border:2px solid #2563EB; }
-QComboBox::drop-down { border:none; width:34px; }
+QComboBox::drop-down { border:none; width:40px; }
 QComboBox QAbstractItemView {
-    background:#FFFFFF; border:1px solid #CBD5E1; font-size:19px;
-    selection-background-color:#2563EB; selection-color:#FFFFFF; padding:5px;
+    background:#FFFFFF; border:1px solid #CBD5E1; font-size:22px;
+    selection-background-color:#2563EB; selection-color:#FFFFFF; padding:7px;
 }
-QCheckBox { font-size:19px; spacing:12px; background:transparent; padding:6px 0; }
+QCheckBox { font-size:22px; spacing:14px; background:transparent; padding:8px 0; }
 QCheckBox::indicator {
-    width:22px; height:22px; border:2px solid #CBD5E1; border-radius:7px;
+    width:26px; height:26px; border:2px solid #CBD5E1; border-radius:8px;
     background:#FFFFFF;
 }
 QCheckBox::indicator:hover   { border-color:#2563EB; }
@@ -102,83 +103,91 @@ QCheckBox::indicator:disabled { background:#F1F5F9; border-color:#E2E8F0; }
 /* 连接命令: 等宽 + 强调底色, 让人一眼看出"复制这一行" */
 QLineEdit#conncmd {
     font-family:Consolas,"Courier New",monospace;
-    font-size:20px; font-weight:bold; color:#065F46;
-    background:#F0FDF4; border:2px solid #6EE7B7; border-radius:11px;
-    padding:13px 15px;
+    font-size:24px; font-weight:bold; color:#065F46;
+    background:#F0FDF4; border:2px solid #6EE7B7; border-radius:13px;
+    padding:16px 18px;
 }
 QLineEdit#conncmd:focus { border:2px solid #10B981; }
+/* 房间号: 又大又醒目, 因为要念给对方/粘到网页上 */
+QLineEdit#roomcode {
+    font-family:Consolas,"Courier New",monospace;
+    font-size:26px; font-weight:bold; color:#7C2D12; letter-spacing:3px;
+    background:#FFF7ED; border:2px solid #FDBA74; border-radius:13px;
+    padding:16px 18px;
+}
+QLineEdit#roomcode:focus { border:2px solid #EA580C; }
 
 /* ---------- 按钮 ---------- */
 QPushButton {
-    background:#F1F5F9; border:1px solid #CBD5E1; border-radius:11px;
-    padding:12px 22px; font-size:18px; color:#0B1220;
+    background:#F1F5F9; border:1px solid #CBD5E1; border-radius:13px;
+    padding:14px 26px; font-size:21px; color:#0B1220;
 }
 QPushButton:hover   { background:#E2E8F0; border-color:#94A3B8; }
 QPushButton:pressed { background:#CBD5E1; }
 QPushButton:disabled{ color:#94A3B8; background:#F8FAFC; border-color:#E2E8F0; }
 QPushButton#primary {
     background:#2563EB; color:#FFFFFF; border:none;
-    font-size:23px; font-weight:bold; padding:16px 42px; border-radius:12px;
+    font-size:28px; font-weight:bold; padding:20px 52px; border-radius:14px;
 }
 QPushButton#primary:hover    { background:#1D4ED8; }
 QPushButton#primary:pressed  { background:#1E40AF; }
 QPushButton#primary:disabled { background:#93B4F7; color:#EFF6FF; }
 QPushButton#primary2 {
     background:#059669; color:#FFFFFF; border:none;
-    font-size:21px; font-weight:bold; padding:14px 30px; border-radius:12px;
+    font-size:24px; font-weight:bold; padding:17px 38px; border-radius:14px;
 }
 QPushButton#primary2:hover    { background:#047857; }
 QPushButton#primary2:pressed  { background:#065F46; }
 QPushButton#primary2:disabled { background:#9AD8C2; color:#ECFDF5; }
 QPushButton#ghost {
-    background:#FFFFFF; color:#2563EB; border:2px solid #93B4F7; font-size:18px;
+    background:#FFFFFF; color:#2563EB; border:2px solid #93B4F7; font-size:21px;
 }
 QPushButton#ghost:hover { background:#EFF6FF; }
 QPushButton#danger {
-    background:#FFFFFF; color:#DC2626; border:2px solid #FCA5A5; font-size:18px;
+    background:#FFFFFF; color:#DC2626; border:2px solid #FCA5A5; font-size:21px;
 }
 QPushButton#danger:hover { background:#FEF2F2; }
 
 /* ---------- 侧边栏 ---------- */
 QWidget#sidebar {
     background:qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                               stop:0 #0B1220, stop:1 #16233D);
+                               stop:0 #0A1020, stop:0.6 #132039, stop:1 #1B2E4F);
 }
-QWidget#sidebar QLabel { color:#9AA9C2; background:transparent; }
+QWidget#sidebar QLabel { color:#9FB2CC; background:transparent; }
 QPushButton#nav {
-    background:transparent; color:#D3DCEC; border:none; border-radius:12px;
-    text-align:left; padding:16px 18px; font-size:21px;
+    background:transparent; color:#DCE4F2; border:none; border-radius:14px;
+    text-align:left; padding:20px 22px; font-size:24px;
 }
-QPushButton#nav:hover   { background:#1C2B48; color:#FFFFFF; }
+QPushButton#nav:hover   { background:#20344F; color:#FFFFFF; }
 QPushButton#nav:checked {
     background:#2563EB; color:#FFFFFF; font-weight:bold;
-    border-left:5px solid #93C5FD;
+    border-left:6px solid #93C5FD;
 }
 QPushButton#nav:checked:hover { background:#1D4ED8; }
-QLabel#brand { color:#FFFFFF; font-size:27px; font-weight:bold; background:transparent; }
-QLabel#brandSub { color:#7C8CA5; font-size:16px; background:transparent; }
+QLabel#brand { color:#FFFFFF; font-size:32px; font-weight:bold; background:transparent; }
+QLabel#brandSub { color:#8397B4; font-size:18px; background:transparent; }
 
 /* ---------- 列表 / 表格 ---------- */
 QListWidget {
-    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:12px;
-    font-size:18px; padding:7px;
+    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:14px;
+    font-size:21px; padding:10px;
 }
-QListWidget::item { padding:8px 10px; border-radius:7px; }
+QListWidget::item { padding:11px 14px; border-radius:9px; }
 QListWidget::item:selected { background:#EFF6FF; color:#1E3A8A; }
 QTableWidget {
-    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:12px;
-    font-size:19px; gridline-color:#E6EBF3;
+    background:#FFFFFF; border:1px solid #CBD5E1; border-radius:14px;
+    font-size:22px; gridline-color:#E6EBF3;
 }
 QHeaderView::section {
-    background:#EEF2F9; color:#3E4C63; font-size:17px; font-weight:bold;
-    border:none; border-bottom:2px solid #CBD5E1; padding:11px 13px;
+    background:#EEF2F9; color:#3E4C63; font-size:20px; font-weight:bold;
+    border:none; border-bottom:2px solid #CBD5E1; padding:14px 16px;
 }
-QTableWidget::item { padding:9px 13px; }
+QTableWidget::item { padding:12px 16px; }
 QTableWidget::item:selected { background:#DBEAFE; color:#1E3A8A; }
 
 /* ---------- 拖拽区 ---------- */
 QFrame#dropzone {
-    background:#F8FAFC; border:3px dashed #94A3B8; border-radius:16px;
+    background:#F8FAFC; border:3px dashed #94A3B8; border-radius:18px;
 }
 QFrame#dropzone[hot="true"] {
     background:#EFF6FF; border:3px dashed #2563EB;
@@ -186,17 +195,17 @@ QFrame#dropzone[hot="true"] {
 
 /* ---------- 控制台 ---------- */
 QPlainTextEdit#console {
-    background:#0B1220; color:#D6E2F5; border:1px solid #1E293B;
-    border-radius:12px; font-family:Consolas,"Courier New",monospace;
-    font-size:17px; padding:15px;
+    background:#0B1220; color:#DCE7F8; border:1px solid #1E293B;
+    border-radius:14px; font-family:Consolas,"Courier New",monospace;
+    font-size:20px; padding:18px;
 }
 
 /* ---------- 滚动 ---------- */
 QScrollArea { border:none; background:transparent; }
-QScrollBar:vertical   { background:#E8EDF5; width:14px; border-radius:7px; margin:0; }
-QScrollBar::handle:vertical   { background:#AEBBCD; border-radius:7px; min-height:48px; }
-QScrollBar:horizontal { background:#E8EDF5; height:14px; border-radius:7px; }
-QScrollBar::handle:horizontal { background:#AEBBCD; border-radius:7px; min-width:48px; }
+QScrollBar:vertical   { background:#E8EDF5; width:16px; border-radius:8px; margin:0; }
+QScrollBar::handle:vertical   { background:#AEBBCD; border-radius:8px; min-height:56px; }
+QScrollBar:horizontal { background:#E8EDF5; height:16px; border-radius:8px; }
+QScrollBar::handle:horizontal { background:#AEBBCD; border-radius:8px; min-width:56px; }
 QScrollBar::add-line, QScrollBar::sub-line { width:0; height:0; }
 """
 
@@ -220,13 +229,13 @@ class DropZone(QFrame):
         super().__init__(parent)
         self.setObjectName("dropzone")
         self.setAcceptDrops(True)
-        self.setMinimumHeight(132)
+        self.setMinimumHeight(158)
         v = QVBoxLayout(self)
         v.setContentsMargins(18, 16, 18, 16)
         v.setSpacing(8)
         self.lbl = _lbl("把文件或文件夹拖到这里", "hint")
         self.lbl.setAlignment(Qt.AlignCenter)
-        self.lbl.setStyleSheet("font-size:19px;color:#334155;font-weight:bold;")
+        self.lbl.setStyleSheet("font-size:23px;color:#1E293B;font-weight:bold;")
         self.sub = _lbl("也可以点下面的按钮选择，支持一次拖多个", "hint")
         self.sub.setAlignment(Qt.AlignCenter)
         v.addWidget(self.lbl)
@@ -276,8 +285,8 @@ if HAS_QT:
             super().__init__()
             self.setWindowTitle("Tailscale-Remote 工具箱")
             self.setStyleSheet(QSS)
-            self.resize(1380, 900)
-            self.setMinimumSize(1120, 700)
+            self.resize(1500, 970)
+            self.setMinimumSize(1240, 800)
 
             self.cfg = load_config()            # noqa: F405
             self.send_files = []
@@ -332,9 +341,9 @@ if HAS_QT:
             # ---------- 侧边栏 ----------
             side = QWidget()
             side.setObjectName("sidebar")
-            side.setFixedWidth(256)
+            side.setFixedWidth(304)
             sv = QVBoxLayout(side)
-            sv.setContentsMargins(16, 20, 16, 20)
+            sv.setContentsMargins(20, 24, 20, 24)
             sv.setSpacing(10)
             sv.addWidget(_lbl("Tailscale", "brand", False))
             sv.addWidget(_lbl("远程工具箱", "brandSub", False))
@@ -345,7 +354,7 @@ if HAS_QT:
             for i, b in enumerate((self.btn_nav_gen, self.btn_nav_send)):
                 b.setObjectName("nav")
                 b.setCheckable(True)
-                b.setMinimumHeight(52)
+                b.setMinimumHeight(66)
                 b.setCursor(Qt.PointingHandCursor)
                 b.clicked.connect(lambda _=False, x=i: self._switch_page(x))
                 sv.addWidget(b)
@@ -362,13 +371,13 @@ if HAS_QT:
             # ---------- 右侧 ----------
             right = QWidget()
             rv = QVBoxLayout(right)
-            rv.setContentsMargins(18, 18, 18, 14)
+            rv.setContentsMargins(20, 20, 20, 16)
             rv.setSpacing(12)
 
             head = QFrame()
             head.setObjectName("head")
             hh = QVBoxLayout(head)
-            hh.setContentsMargins(20, 16, 20, 16)
+            hh.setContentsMargins(26, 22, 26, 22)
             hh.setSpacing(4)
             self.lbl_head_t = _lbl("生成部署包", "title", False)
             self.lbl_head_s = _lbl("", "subtitle")
@@ -460,7 +469,7 @@ if HAS_QT:
             f = QFrame()
             f.setObjectName("card")
             v = QVBoxLayout(f)
-            v.setContentsMargins(18, 16, 18, 18)
+            v.setContentsMargins(22, 20, 22, 22)
             v.setSpacing(11)
             v.addWidget(_lbl(title, "cardTitle", False))
             if sub:
@@ -563,7 +572,7 @@ if HAS_QT:
             self.ed_pub.setPlaceholderText(
                 "ssh-ed25519 AAAA…\n点上方『一键生成密钥对』最省事；"
                 "也可从 ~/.ssh/id_ed25519.pub 复制整行粘进来。")
-            self.ed_pub.setFixedHeight(96)
+            self.ed_pub.setFixedHeight(112)
             v.addWidget(self.ed_pub)
             self.lbl_pub = _lbl("", "hint")
             v.addWidget(self.lbl_pub)
@@ -609,13 +618,62 @@ if HAS_QT:
             self.lbl_summary = _lbl("", "sum")
             v.addWidget(self.lbl_summary)
 
+            # ⑤ 网页消息弹窗（可选）
+            c, v = self._card(L, "⑤  网页消息弹窗（可选）",
+                              "让对方电脑右下角弹通知，还能直接回话、互传文件")
+            h = QHBoxLayout()
+            h.setSpacing(14)
+            self.cb_notify = QCheckBox(
+                "启用：网页打字 → 对方右下角弹窗，对方可回复；文件双向互传")
+            h.addWidget(self.cb_notify)
+            h.addStretch(1)
+            v.addLayout(h)
+
+            self.row_notify = QWidget()
+            rn = QVBoxLayout(self.row_notify)
+            rn.setContentsMargins(0, 0, 0, 0)
+            rn.setSpacing(10)
+
+            h = QHBoxLayout()
+            h.setSpacing(12)
+            h.addWidget(_lbl("房间号", "field", False))
+            self.ed_room = QLineEdit()
+            self.ed_room.setObjectName("roomcode")
+            self.ed_room.setMaxLength(12)
+            self.ed_room.setPlaceholderText("例如 r7k2mp")
+            self.ed_room.setFixedWidth(260)
+            h.addWidget(self.ed_room)
+            b_rnd = QPushButton("随机一个")
+            b_rnd.setObjectName("ghost")
+            b_rnd.clicked.connect(self._roll_room)
+            h.addWidget(b_rnd)
+            b_web = QPushButton("打开网页控制台")
+            b_web.setObjectName("ghost")
+            b_web.setToolTip(RELAY_URL)                         # noqa: F405
+            b_web.clicked.connect(self._open_console)
+            h.addWidget(b_web)
+            h.addStretch(1)
+            rn.addLayout(h)
+
+            rn.addWidget(_lbl(
+                f"控制台：{RELAY_URL}"                            # noqa: F405
+                "    ← 网页上填同一个房间号就能和对方对话（手机也能开）。", "hint"))
+            rn.addWidget(_lbl(
+                "被控端收到包后多出一个『消息弹窗.bat』，双击即常驻托盘；"
+                "收到的文件自动落到 用户目录\\TailscaleRemote\\收件箱，"
+                "丢进 发件箱 的文件会自动传回网页 —— 全程不需要确认。", "hint"))
+            rn.addWidget(_lbl(
+                "只用 Windows 被控端；不勾选则包里不会出现任何多余文件。", "hint"))
+            v.addWidget(self.row_notify)
+            self.row_notify.setVisible(False)
+
             # 日志
             c, v = self._card(L, "运行日志")
             self.txt_gen = QPlainTextEdit()
             self.txt_gen.setObjectName("console")
             self.txt_gen.setReadOnly(True)
             self.txt_gen.setMaximumBlockCount(self.MAX_LOG_LINES)
-            self.txt_gen.setMinimumHeight(200)
+            self.txt_gen.setMinimumHeight(250)
             v.addWidget(self.txt_gen)
             L.addStretch(1)
 
@@ -764,7 +822,7 @@ if HAS_QT:
             self.txt_send.setObjectName("console")
             self.txt_send.setReadOnly(True)
             self.txt_send.setMaximumBlockCount(self.MAX_LOG_LINES)
-            self.txt_send.setMinimumHeight(190)
+            self.txt_send.setMinimumHeight(240)
             v.addWidget(self.txt_send)
             L.addStretch(1)
 
@@ -1417,6 +1475,8 @@ if HAS_QT:
                     REPO_ROOT, linux_on, win_on, arch, auth, pub,   # noqa: F405
                     out_dir, prefix, fmt, want_7zip=want7,
                     offline=offline,
+                    notify_room=(self.ed_room.text().strip()
+                                 if self.cb_notify.isChecked() else ""),
                     log=lambda s: self.log_sig.emit("gen", str(s))))
 
             self._gen_ctx = (out_dir,)
@@ -1509,6 +1569,8 @@ if HAS_QT:
                 "remember_auth": self.cb_remember.isChecked(),
                 "authkey": (normalize_authkey(self.ed_auth.text())  # noqa: F405
                             if self.cb_remember.isChecked() else ""),
+                "notify_enabled": self.cb_notify.isChecked(),
+                "notify_room": self.ed_room.text().strip(),
             }
 
         def _autosave(self):
@@ -1529,6 +1591,8 @@ if HAS_QT:
             self.cb_7z_lin.setChecked(bool(cfg.get("want_7z_linux")))
             self.cb_7z_win.setChecked(bool(cfg.get("want_7z_windows")))
             self.cb_remember.setChecked(bool(cfg.get("remember_auth")))
+            self.cb_notify.setChecked(bool(cfg.get("notify_enabled")))
+            self.ed_room.setText(cfg.get("notify_room") or "")
             if cfg.get("pubkey"):
                 self.ed_pub.setPlainText(cfg["pubkey"])
             if cfg.get("remember_auth") and cfg.get("authkey"):
@@ -1540,9 +1604,10 @@ if HAS_QT:
             # 值设完再连信号，避免恢复过程产生抖动
             for w in (self.cmb_os, self.cmb_mode, self.cmb_arch, self.cmb_fmt):
                 w.currentIndexChanged.connect(self._on_changed)
-            for w in (self.cb_7z_lin, self.cb_7z_win, self.cb_remember):
+            for w in (self.cb_7z_lin, self.cb_7z_win, self.cb_remember,
+                      self.cb_notify):
                 w.toggled.connect(self._on_changed)
-            for w in (self.ed_auth, self.ed_out, self.ed_prefix):
+            for w in (self.ed_auth, self.ed_out, self.ed_prefix, self.ed_room):
                 w.textChanged.connect(self._on_changed)
             self.ed_pub.textChanged.connect(self._on_changed)
             # ★ 这些槽函数不带参数, 而 Qt 信号会传参 -> 必须用 lambda 吞掉,
@@ -1557,6 +1622,7 @@ if HAS_QT:
         def _on_changed(self, *a):
             self._sync_platform()
             self._sync_mode()
+            self._sync_notify()
             self._check_auth()
             self._check_pub()
             self._sync_summary()
@@ -1597,6 +1663,23 @@ if HAS_QT:
                 "状态：[OK] 公钥格式正确，会自动写入包内并配好免密" if ok else
                 "状态：x 格式不对，应为 ssh-ed25519 AAAA… 开头的一整行")
             self.lbl_pub.setStyleSheet("color:#15803D;" if ok else "color:#DC2626;")
+
+        # ---------------- 网页消息弹窗 ----------------
+        def _roll_room(self):
+            self.ed_room.setText(new_room_code())               # noqa: F405
+
+        def _open_console(self):
+            try:
+                QDesktopServices.openUrl(QUrl(RELAY_URL))        # noqa: F405
+            except Exception:                                    # noqa: BLE001
+                dbg_exc("open console")
+            self._log_now("gen", f"已打开网页控制台：{RELAY_URL}")  # noqa: F405
+
+        def _sync_notify(self):
+            on = self.cb_notify.isChecked()
+            self.row_notify.setVisible(on)
+            if on and not (self.ed_room.text() or "").strip():
+                self.ed_room.setText(new_room_code())            # noqa: F405
 
         def _toggle_auth_visible(self):
             if self.ed_auth.echoMode() == QLineEdit.Password:
@@ -1716,7 +1799,7 @@ def main():
         #   用 pt 会让没在 QSS 里指定字号的控件(消息框/表格项)字号翻倍,
         #   与 QSS 里的 px 字号打架 -> 文字被撑爆/裁切。px 统一最稳。
         _f = QFont(FONT)
-        _f.setPixelSize(19)      # 基准字号（px；本机 DPI 192，不能用 pt）
+        _f.setPixelSize(22)      # 基准字号（px；本机 DPI 192，不能用 pt）
         app.setFont(_f)
         app.setStyle("Fusion")
         w = MainWindow()

@@ -176,7 +176,11 @@ def has_pyqt5(exe):
         for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"):
             env.pop(k, None)
         r = subprocess.run([exe, "-c", "import PyQt5.QtWidgets"],
-                           capture_output=True, timeout=25, env=env)
+                           capture_output=True, timeout=25, env=env,
+                           # ★ 探测解释器时**绝不能**闪黑框: 本机 pythonw 无控制台,
+                           #   被 spawn 的 python.exe 会新开一个控制台 -> 双击图标
+                           #   瞬间弹黑框的元凶就是这里。
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         ok = r.returncode == 0
     except Exception:      # noqa: BLE001
         ok = False

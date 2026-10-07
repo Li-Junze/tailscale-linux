@@ -34,6 +34,18 @@ import datetime
 import subprocess
 
 
+def _no_window():
+    """★ 铁律: 本程序会反复调用 tailscale / ssh-keygen 等控制台程序。
+
+    从 pythonw(无控制台) 里 subprocess 一个控制台程序时, Windows 会给它
+    **新建一个控制台窗口** —— 哪怕你 capture_output=True 也一样。表现就是
+    "用着用着老闪黑框"。所以每一次 spawn 都必须带 CREATE_NO_WINDOW。
+    """
+    if os.name == "nt":
+        return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+    return 0
+
+
 def _hide_console():
     """隐藏 Windows 控制台窗口(GUI 背后不该有个黑框)。
     ★ 必须在 QApplication 创建之前调用, 且要在 import PyQt5 之前尝试。
@@ -162,6 +174,7 @@ def generate_ssh_keypair(force=False, log=print):
             p = subprocess.run(
                 ["ssh-keygen", "-t", "ed25519", "-f", priv],
                 input="\r\n\r\n", capture_output=True, text=True, timeout=60,
+                creationflags=_no_window(),
             )
         except FileNotFoundError:
             log("  [X] 未找到 ssh-keygen。Windows 需安装 OpenSSH 客户端: 设置→可选功能→OpenSSH 客户端")
@@ -569,6 +582,62 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
 """
 
 
+# ------------------------------------------------------------ 网页消息 / 弹窗
+# ★ 中继地址: Cloudflare Pages 项目 ts-remote-web。
+#   为什么不用 *.workers.dev —— 它在国内被 DNS 污染(解析到 75.126.x),
+#   被控端根本连不上; *.pages.dev 解析正常、可达。
+RELAY_URL = "https://ts-remote-web.pages.dev"
+
+
+def new_room_code():
+    """生成一个房间号。双方填同一个值才能配对。"""
+    import random
+    return "r" + "".join(random.choice("abcdefghijkmnpqrstuvwxyz23456789")
+                         for _ in range(6))
+
+
+# 顶层入口: 双击 → 右下角开始收消息弹窗(隐藏常驻托盘)
+NOTIFY_BAT = """@echo off
+REM ============================================================
+REM  消息弹窗.bat -- 打开「右下角消息弹窗」（被控端）
+REM  之后网页上发的文字会像系统通知一样在右下角弹出, 可直接打字回复;
+REM  文件双向自动收发（收件箱 / 发件箱）。隐藏常驻托盘。
+REM  ASCII-only on purpose (see deploy.bat).
+REM ============================================================
+chcp 936 >nul 2>nul
+setlocal enableextensions
+cd /d "%~dp0" 2>nul
+set "PS1="
+for /d %%D in ("%~dp0*") do if exist "%%~fD\\windows\\notify-windows.ps1" set "PS1=%%~fD\\windows\\notify-windows.ps1"
+if not defined PS1 if exist "%~dp0windows\\notify-windows.ps1" set "PS1=%~dp0windows\\notify-windows.ps1"
+if not defined PS1 (
+  echo.
+  echo [X] 包不完整: 找不到 程序\\windows\\notify-windows.ps1
+  echo     请把整个文件夹一起解压后再运行。
+  echo.
+  pause
+  exit /b 1
+)
+set "ROOM=%~1"
+set "PS1DIR="
+for %%F in ("%PS1%") do set "PS1DIR=%%~dpF"
+if not defined ROOM if exist "%PS1DIR%keys\\notify.local.txt" set /p ROOM=<"%PS1DIR%keys\\notify.local.txt"
+if not defined ROOM (
+  echo.
+  echo [!] 没有房间号。请用:  消息弹窗.bat 你的房间号
+  echo.
+  pause
+  exit /b 1
+)
+set "PS1F=%PS1%"
+set "ROOMF=%ROOM%"
+set "RELAYF=__RELAY__"
+REM 隐藏启动: 外层 powershell 也是 Hidden, 所以只会有一瞬间的 cmd 闪过
+powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "Start-Process powershell -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',$env:PS1F,'-Room',$env:ROOMF,'-Relay',$env:RELAYF) -WindowStyle Hidden"
+exit /b 0
+"""
+
+
 # ------------------------------------------------------------ 编码/换行归一化
 def _read_any(path):
     """按 utf-8-sig -> gbk -> latin-1 依次尝试解码, 换行统一成 \\n。"""
@@ -724,7 +793,7 @@ QUICK_TXT = """【怎么用 —— 只需要点一下】
 
 
 
-def write_root_files(pkg_dir, linux_on, windows_on, log=print):
+def write_root_files(pkg_dir, linux_on, windows_on, log=print, notify_room=""):
     """顶层只放醒目入口 + 文档, 实现细节全在 程序/ 下。"""
     made = []
     if linux_on:
@@ -746,6 +815,10 @@ def write_root_files(pkg_dir, linux_on, windows_on, log=print):
         p = os.path.join(pkg_dir, "clean.bat")
         _write_enc(p, CLEAN_BAT, "gbk", "\r\n")
         made.append("clean.bat")
+        if notify_room:
+            p = os.path.join(pkg_dir, "消息弹窗.bat")
+            _write_enc(p, NOTIFY_BAT.replace("__RELAY__", RELAY_URL), "gbk", "\r\n")
+            made.append("消息弹窗.bat")
 
     # ★ 这个文件是给"双击用记事本看"的普通人, 存 GBK 才是记事本最稳的形态
     p = os.path.join(pkg_dir, "使用说明.txt")
@@ -757,7 +830,7 @@ def write_root_files(pkg_dir, linux_on, windows_on, log=print):
 
 # ------------------------------------------------------------ 主体装配
 def assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
-                     want_7zip=(), offline=True, log=print):
+                     want_7zip=(), offline=True, log=print, notify_room=""):
     """offline=True  -> 保留 assets 预置二进制(包大, 目标机零下载)
        offline=False -> 剥离二进制(包小, 目标机联网自取)"""
     inner = os.path.join(pkg_dir, "程序")
@@ -839,6 +912,12 @@ def assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
                 log("      （本机 ~/.ssh/id_ed25519 是配对私钥，连对方时自动用它，无需密码）")
             else:
                 log("  [!] 拿不到控制端公钥，对方将无法免密登录（仍需交互式粘贴）")
+            # ---- 烘焙房间号: 双击『消息弹窗.bat』即可自动配对 ----
+            if notify_room:
+                with open(os.path.join(keys_dir, "notify.local.txt"),
+                          "w", encoding="utf-8") as f:
+                    f.write(notify_room + "\n")
+                log(f"  [OK] 烘焙消息房间号 → 程序/windows/keys/notify.local.txt ({notify_room})")
 
         # ---- 提示二进制是否齐全 ----
         if plat == "linux":
@@ -852,7 +931,7 @@ def assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
 
 
 def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
-                     want_7zip=(), offline=True, log=print):
+                     want_7zip=(), offline=True, log=print, notify_room=""):
     """生成包内 README.md（覆盖仓库总览，面向拿到包的人）"""
     L = []
     L.append("# Tailscale 远程连接 · 部署包")
@@ -944,6 +1023,16 @@ def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
     L.append("")
     L.append("---")
     L.append("")
+    if notify_room:
+        L.append("## 网页消息 / 弹窗（已启用）")
+        L.append("")
+        L.append(f"- 控制台网址：{RELAY_URL}")
+        L.append(f"- 房间号：`{notify_room}`（网页上要填同一个）")
+        L.append("- 被控端：双击包里的 `消息弹窗.bat`，之后就常驻托盘。")
+        L.append("- 效果：网页上打字 → 这台电脑右下角弹通知，可直接打字回复；")
+        L.append("  文件双向互传，收到的自动存到 `%USERPROFILE%\\TailscaleRemote\\收件箱`，")
+        L.append("  丢进 `发件箱` 的文件会自动传回网页，全程不用确认。")
+        L.append("")
     L.append("[!] 本包内含明文 Tailscale authkey，请只发给你信任的人。")
     with open(os.path.join(pkg_dir, "README.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(L) + "\n")
@@ -951,9 +1040,11 @@ def write_pkg_readme(pkg_dir, linux_on, windows_on, has_auth, has_pub,
 
 
 def generate(repo_root, linux_on, windows_on, arch, auth, pub,
-             out_dir, prefix, fmt, want_7zip=(), offline=True, log=print):
+             out_dir, prefix, fmt, want_7zip=(), offline=True, log=print,
+             notify_room=""):
     """fmt: 'tar.gz' | 'zip' | 'both'；want_7zip: 内置便携 7-Zip 的平台集合；
-       offline: True=内置二进制(离线可跑) / False=轻量包(目标机联网)"""
+       offline: True=内置二进制(离线可跑) / False=轻量包(目标机联网)；
+       notify_room: 非空则在包内烘焙该房间号并放出『消息弹窗.bat』"""
     if not (linux_on or windows_on):
         raise ValueError("至少选择一个目标系统")
     platforms = []
@@ -986,12 +1077,21 @@ def generate(repo_root, linux_on, windows_on, arch, auth, pub,
             log("[!] 无法自动生成公钥：对方机器上仍需手动粘贴公钥才能免密。")
 
     log(f"包名: {pkg_name}")
+    notify_room = (notify_room or "").strip()
+    if notify_room and not windows_on:
+        log("  [!] 消息弹窗目前只支持 Windows 被控端, 已忽略房间号。")
+        notify_room = ""
+    if notify_room:
+        log(f"  [i] 网页消息已启用 · 房间号 {notify_room}")
+        log(f"      控制台: {RELAY_URL}   对方双击包里的『消息弹窗.bat』即可。")
     assemble_package(pkg_dir, platforms, auth, pub, arch, repo_root,
-                     want_7zip=want_7zip, offline=offline, log=log)
-    write_root_files(pkg_dir, linux_on, windows_on, log=log)
+                     want_7zip=want_7zip, offline=offline, log=log,
+                     notify_room=notify_room)
+    write_root_files(pkg_dir, linux_on, windows_on, log=log,
+                     notify_room=notify_room)
     write_pkg_readme(pkg_dir, linux_on, windows_on, bool(auth),
                      bool(pub and windows_on), want_7zip=want_7zip,
-                     offline=offline, log=log)
+                     offline=offline, log=log, notify_room=notify_room)
 
     # ★ 出包前自检编码/换行 —— 这些坑一旦漏到目标机就是"包根本不跑"
     problems = verify_package(pkg_dir, log=log)
@@ -1035,10 +1135,7 @@ TS_IPN_PATHS = [
 ]
 
 
-def _no_window():
-    if os.name == "nt":
-        return getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-    return 0
+# _no_window() 定义在文件顶部的 _hide_console 旁边 —— 全局唯一, 别再定义第二份。
 
 
 def ts_backend_state():
@@ -1163,19 +1260,25 @@ def _zip_dir(d, log=None):
     return out
 
 
-def list_ts_targets(include_self=True):
+def list_ts_targets(include_self=True, my=None):
     """列出 tailnet 里的设备。
 
     include_self=True 时把本机也列出来(标记 is_self), 因为用户需要看到并
     管理自己这台机器(比如退出 tailnet)。发送时才过滤掉本机。
+
+    my: 已知的本机 IP 列表。★ 传进来就少起两次进程 —— 每次 spawn 都是一次
+        可能的"闪黑框 + 几十毫秒", 能省则省。
     """
     ts = _find_ts()
     if not ts:
         return []
-    my = set(_ts_my_ips())
+    if my is None:
+        my = set(_ts_my_ips())
+    else:
+        my = set(my)
     try:
         r = subprocess.run([ts, "status"], capture_output=True, text=True,
-                           timeout=20)
+                           timeout=20, creationflags=_no_window())
     except Exception:  # noqa: BLE001
         return []
     out = []
@@ -1211,7 +1314,8 @@ def _ts_my_ips():
     try:
         for flag in ("-4", "-6"):
             r = subprocess.run([ts, "ip", flag], capture_output=True,
-                               text=True, timeout=10)
+                               text=True, timeout=10,
+                               creationflags=_no_window())
             for ln in (r.stdout or "").split():
                 if ln.count(".") == 3 or ":" in ln:
                     out.append(ln)
@@ -1228,7 +1332,7 @@ def ts_logout_self():
     dbg("[ts] logout self")
     try:
         r = subprocess.run([ts, "logout"], capture_output=True, text=True,
-                           timeout=30)
+                           timeout=30, creationflags=_no_window())
     except Exception as e:  # noqa: BLE001
         dbg_exc("ts logout")
         return False, f"执行失败: {e}"
@@ -1375,7 +1479,7 @@ def ts_snapshot(ttl=3.0):
         return list(_PEER_CACHE["peers"]), list(_PEER_CACHE["my"])
     try:
         my = _ts_my_ips_fast()
-        peers = list_ts_targets()
+        peers = list_ts_targets(my=my)
     except Exception:  # noqa: BLE001
         dbg_exc("ts_snapshot")
         return list(_PEER_CACHE["peers"]), list(_PEER_CACHE["my"])
@@ -1392,7 +1496,7 @@ def _ts_my_ips_fast():
         return []
     try:
         r = subprocess.run([ts, "ip", "-4"], capture_output=True, text=True,
-                           timeout=8)
+                           timeout=8, creationflags=_no_window())
         return [x for x in (r.stdout or "").split()
                 if x.count(".") == 3]
     except Exception:  # noqa: BLE001

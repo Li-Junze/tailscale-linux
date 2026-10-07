@@ -1,0 +1,700 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Tailscale 远程控制台</title>
+<style>
+:root{
+  --bg:#eef2f9; --card:#fff; --ink:#0b1220; --dim:#64748b; --line:#e3e9f4;
+  --blue:#2563eb; --blue-d:#1d4ed8; --green:#059669; --amber:#d97706; --red:#dc2626;
+  --shadow:0 10px 30px rgba(15,23,42,.08);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.6 "Microsoft YaHei",-apple-system,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,textarea{font-family:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding:16px 16px 40px}
+
+/* ---------- 页头 ---------- */
+header{
+  background:linear-gradient(135deg,#1e3a8a,#2563eb 55%,#4f8df7);
+  color:#fff;border-radius:20px;padding:20px 24px;box-shadow:var(--shadow);
+  display:flex;flex-wrap:wrap;gap:14px;align-items:center;
+}
+header h1{margin:0;font-size:26px;letter-spacing:.5px}
+header .sub{opacity:.85;font-size:13px;margin-top:2px}
+.grow{flex:1 1 auto}
+.roombox{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.16);
+  border:1px solid rgba(255,255,255,.35);border-radius:14px;padding:8px 10px}
+.roombox label{font-size:12px;opacity:.9}
+.roombox input{
+  width:150px;background:#fff;border:none;border-radius:9px;padding:8px 10px;
+  font:700 17px/1 ui-monospace,Consolas,monospace;color:#7c2d12;letter-spacing:2px;
+}
+.roombox button{background:#fff;color:#1e3a8a;border:none;border-radius:9px;
+  padding:9px 12px;font-weight:700;cursor:pointer}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#94a3b8;margin-right:6px}
+.dot.on{background:#22c55e;box-shadow:0 0 0 4px rgba(34,197,94,.25)}
+.dot.off{background:#ef4444}
+
+/* ---------- 布局 ---------- */
+.grid{display:grid;grid-template-columns:1.55fr 1fr;gap:16px;margin-top:16px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;
+  box-shadow:var(--shadow);overflow:hidden}
+.card>h2{margin:0;padding:14px 18px;font-size:16px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:8px}
+.card>h2 .tag{margin-left:auto;font-size:12px;font-weight:400;color:var(--dim)}
+.body{padding:16px 18px}
+
+/* ---------- 页签 ---------- */
+.tabs{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.tabs button{border:1px solid var(--line);background:#fff;color:var(--dim);
+  border-radius:12px;padding:11px 18px;font-size:15px;font-weight:700;cursor:pointer}
+.tabs button.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+.view{display:none}
+.view.on{display:block}
+.form{display:grid;grid-template-columns:150px 1fr;gap:10px 12px;align-items:center}
+.form label{font-size:14px;color:var(--dim)}
+.form input,.form select{border:2px solid var(--line);border-radius:11px;padding:10px 12px;
+  font-size:14px;outline:none;width:100%}
+.form input:focus,.form select:focus{border-color:var(--blue)}
+.form .full{grid-column:1 / -1}
+.tip{font-size:12.5px;color:var(--dim);line-height:1.7;margin-top:8px}
+.dlbox{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.dlbox a{text-decoration:none}
+.devrow{display:flex;gap:10px;align-items:center;padding:10px 12px;border:1px solid var(--line);
+  border-radius:12px;margin-bottom:8px;background:#fff}
+.devrow.off{opacity:.55}
+.devrow .nm{flex:1;min-width:0;font-size:13.5px}
+.devrow .nm b{font-size:14.5px}
+.devrow .nm div{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ---------- 聊天 ---------- */
+#log{height:min(56vh,520px);overflow:auto;padding:16px 18px;background:
+  linear-gradient(#f8fafc,#fff);display:flex;flex-direction:column;gap:12px}
+.msg{max-width:78%;padding:11px 14px;border-radius:16px;white-space:pre-wrap;
+  word-break:break-word;position:relative;font-size:15px}
+.msg .meta{font-size:11px;color:var(--dim);margin-top:5px}
+.msg.web{align-self:flex-end;background:#2563eb;color:#fff;border-bottom-right-radius:5px}
+.msg.web .meta{color:#dbeafe}
+.msg.pc{align-self:flex-start;background:#fff;border:1px solid var(--line);border-bottom-left-radius:5px}
+.msg.sys{align-self:center;background:#fef3c7;border:1px solid #fde68a;color:#92400e;
+  font-size:12.5px;padding:7px 12px;border-radius:999px;max-width:92%}
+.msg.file{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46;align-self:flex-start;
+  border-bottom-left-radius:5px}
+.msg.file.web{align-self:flex-end;background:#eff6ff;border-color:#bfdbfe;color:#1e3a8a;
+  border-bottom-right-radius:5px;border-bottom-left-radius:16px}
+.msg.file a{color:inherit;font-weight:700;text-decoration:none;border-bottom:2px solid currentColor}
+.msg .fmeta{font-size:12px;opacity:.8;margin-top:3px}
+.composer{border-top:1px solid var(--line);padding:12px;display:flex;gap:10px;align-items:flex-end;background:#fff}
+.composer textarea{flex:1;resize:none;height:56px;border:2px solid var(--line);border-radius:13px;
+  padding:10px 12px;font-size:15px;outline:none}
+.composer textarea:focus{border-color:var(--blue)}
+.btn{border:none;border-radius:13px;padding:12px 18px;font-size:15px;font-weight:700;
+  cursor:pointer;background:#f1f5f9;color:var(--ink);border:1px solid #cbd5e1}
+.btn:hover{background:#e2e8f0}
+.btn.p{background:var(--blue);color:#fff;border:none;padding:14px 22px}
+.btn.p:hover{background:var(--blue-d)}
+.btn.g{background:var(--green);color:#fff;border:none}
+.btn.sm{padding:8px 12px;font-size:13px;border-radius:10px}
+
+/* ---------- 右侧 ---------- */
+.info{display:flex;justify-content:space-between;gap:10px;padding:9px 0;
+  border-bottom:1px dashed var(--line);font-size:14px}
+.info:last-child{border-bottom:none}
+.info b{font-weight:700}
+.mono{font-family:ui-monospace,Consolas,monospace}
+.rows{max-height:300px;overflow:auto}
+.frow{display:flex;gap:10px;align-items:center;padding:10px;border:1px solid var(--line);
+  border-radius:12px;margin-bottom:8px;background:#fff}
+.frow .nm{flex:1;min-width:0}
+.frow .nm div:first-child{font-weight:700;font-size:14px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.frow .nm div:last-child{font-size:12px;color:var(--dim)}
+.hint{font-size:12.5px;color:var(--dim);line-height:1.7}
+details.api{margin-top:12px}
+details.api summary{cursor:pointer;font-weight:700;font-size:14px;color:var(--blue)}
+pre{background:#0b1220;color:#dce7f8;padding:12px;border-radius:12px;overflow:auto;
+  font-size:12px;line-height:1.6;max-height:260px}
+.bar{height:8px;border-radius:99px;background:#e2e8f0;overflow:hidden;margin-top:8px}
+.bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,#2563eb,#22c55e);
+  transition:width .25s}
+#toast{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:9}
+#toast div{background:#0b1220;color:#fff;padding:11px 15px;border-radius:12px;font-size:14px;
+  box-shadow:var(--shadow);animation:pop .25s}
+@keyframes pop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:700}
+.pill.ok{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
+.pill.no{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div>
+    <h1>Tailscale 远程控制台</h1>
+    <div class="sub">网页发文本 / 传文件 → 对方电脑右下角弹通知，对方可直接回话、回传文件</div>
+  </div>
+  <div class="grow"></div>
+  <div class="roombox">
+    <label>房间号</label>
+    <input id="room" maxlength="12" spellcheck="false">
+    <button id="btnRoom">连接</button>
+  </div>
+  <div style="font-size:13px">
+    <span class="dot" id="dPc"></span><span id="tPc">对方离线</span>
+  </div>
+</header>
+
+<div class="tabs">
+  <button id="tabChat"  class="on">对话 / 传文件</button>
+  <button id="tabBuild">生成部署包</button>
+  <button id="tabDev">设备 / 远程清除</button>
+</div>
+
+<!-- ==================== 视图 1：对话 ==================== -->
+<div class="view on" id="viewChat">
+<div class="grid">
+  <!-- 左：对话 -->
+  <section class="card">
+    <h2>对话 <span class="tag" id="tRoom"></span></h2>
+    <div id="log"></div>
+    <div class="composer">
+      <textarea id="txt" placeholder="输入要发到对方右下角的内容…  （Ctrl + Enter 发送）"></textarea>
+      <button class="btn p" id="btnSend">发送</button>
+    </div>
+    <div style="padding:0 12px 12px;display:flex;gap:10px;align-items:center">
+      <input type="file" id="file" multiple style="display:none">
+      <button class="btn g" id="btnFile">发送文件…</button>
+      <span class="hint" id="upHint">文件会切块上传，对方自动存到默认目录，不用确认</span>
+    </div>
+    <div style="padding:0 12px 14px"><div class="bar"><i id="upBar"></i></div></div>
+  </section>
+
+  <!-- 右：状态 / 文件 / 接口 -->
+  <div>
+    <section class="card">
+      <h2>对方状态</h2>
+      <div class="body">
+        <div class="info"><span>在线</span><b id="sOn">—</b></div>
+        <div class="info"><span>主机名</span><b class="mono" id="sHost">—</b></div>
+        <div class="info"><span>用户名</span><b class="mono" id="sUser">—</b></div>
+        <div class="info"><span>Tailscale IP</span><b class="mono" id="sIp">—</b></div>
+        <div class="info"><span>Agent 版本</span><b class="mono" id="sVer">—</b></div>
+        <div class="info"><span>最后心跳</span><b id="sBeat">—</b></div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <h2>文件 <span class="tag">双向 · 点击下载</span></h2>
+      <div class="body"><div class="rows" id="files"><div class="hint">还没有文件</div></div></div>
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <h2>被控端接入</h2>
+      <div class="body">
+        <div class="hint">在被控端电脑上双击部署包里的 <b>消息弹窗</b> 即可。手动跑也行：</div>
+        <pre id="cmdBox">powershell -NoProfile -ExecutionPolicy Bypass -File notify-windows.ps1 -Room 房间号</pre>
+        <button class="btn sm" id="btnCopyCmd">复制命令</button>
+        <button class="btn sm" id="btnNotify">开启浏览器通知</button>
+        <details class="api">
+          <summary>中继接口清单（agent 可直接调用）</summary>
+          <pre id="apiBox">加载中…</pre>
+        </details>
+      </div>
+    </section>
+  </div>
+</div>
+</div><!-- /viewChat -->
+
+<!-- ==================== 视图 2：生成部署包 ==================== -->
+<div class="view" id="viewBuild">
+<div class="grid">
+  <section class="card">
+    <h2>生成部署包 <span class="tag">现场打包 · 不经过任何第三方网盘</span></h2>
+    <div class="body">
+      <div class="form">
+        <label>房间号</label>
+        <input id="bRoom" maxlength="12" spellcheck="false">
+        <label>目标系统</label>
+        <select id="bPlat">
+          <option value="win">Windows（.bat + PowerShell）</option>
+          <option value="linux">Linux（.sh）</option>
+        </select>
+        <label>控制端 SSH 公钥</label>
+        <input id="bPub" placeholder="ssh-ed25519 AAAA... 粘贴进来，被控端就能免密登录">
+        <label>Tailscale authkey</label>
+        <input id="bAuth" placeholder="tskey-auth-... （可留空，留空则对方要手动登录一次）">
+        <label>回信到（用户）</label>
+        <input id="bUser" placeholder="控制端的用户名，如 39969">
+        <label>回信到（IP）</label>
+        <input id="bHost" placeholder="控制端的 Tailscale IP，如 100.79.60.124">
+        <label>回信落点</label>
+        <input id="bPath" value="Desktop" placeholder="控制端上的目录，如 Desktop 或 D:/回执">
+        <label>中继地址</label>
+        <input id="bRelay" value="https://ts-remote-web.pages.dev">
+      </div>
+      <div class="dlbox">
+        <button class="btn p" id="btnBuild">生成 setup.zip</button>
+        <a class="btn g" id="dlBat"  href="/pkg/launcher.bat" download="一键部署.bat">下载一键部署.bat</a>
+        <a class="btn"   id="dlSh"   href="/pkg/launcher.sh"  download="一键部署.sh">下载一键部署.sh</a>
+      </div>
+      <div class="bar"><i id="bdBar"></i></div>
+      <div class="tip" id="bHint"></div>
+      <details class="api">
+        <summary>这两个文件怎么用</summary>
+        <pre id="bDoc"></pre>
+      </details>
+    </div>
+  </section>
+
+  <div>
+    <section class="card">
+      <h2>SSH 公钥从哪来</h2>
+      <div class="body">
+        <div class="tip">
+          在你自己（控制端）电脑上跑一次就能拿到公钥，把整行粘到左边：
+        </div>
+        <pre id="keyCmd">ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
+        <button class="btn sm" id="btnCopyKey">复制</button>
+        <div class="tip" style="margin-top:12px">
+          留空也能部署，只是控制端 ssh 进去时要输一次对方开机密码。
+        </div>
+      </div>
+    </section>
+    <section class="card" style="margin-top:16px">
+      <h2>部署后会发生什么</h2>
+      <div class="body"><div class="tip" id="bFlow"></div></div>
+    </section>
+  </div>
+</div>
+</div><!-- /viewBuild -->
+
+<!-- ==================== 视图 3：设备 / 远程清除 ==================== -->
+<div class="view" id="viewDev">
+<div class="grid">
+  <section class="card">
+    <h2>已接入设备 <span class="tag">点「清除」即远程卸载</span></h2>
+    <div class="body">
+      <div id="devList"><div class="tip">加载中…</div></div>
+      <div style="margin-top:12px;display:flex;gap:10px">
+        <button class="btn sm" id="btnRefreshDev">刷新</button>
+        <span class="tip" style="margin:0">在线设备才会立即执行清除；离线的会在下次开机收到。</span>
+      </div>
+    </div>
+  </section>
+  <div>
+    <section class="card">
+      <h2>关于清除</h2>
+      <div class="body">
+        <div class="tip">
+          <b>清除</b>（橙）：移除开机任务 → 撤销你的公钥 → 删除安装目录。
+          保留 Tailscale 入网，对方仍能连 tailnet，只是不再被本工具管理。<br><br>
+          <b>彻底清除</b>（红）：在上面基础上再退出 tailnet。对方会掉出你的网络，
+          需要重新登录才能再连。<br><br>
+          两条都会在对方机器上把本工具删干净，不留开机任务、不留公钥、不留安装目录。
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+</div><!-- /viewDev -->
+
+</div><!-- /wrap -->
+<div id="toast"></div>
+
+<script>
+(function(){
+  'use strict';
+  var API = location.origin;
+  var $ = function(id){ return document.getElementById(id); };
+
+  var room = localStorage.getItem('tsr_room') || '';
+  if(!room){ room = 'r' + Math.random().toString(36).slice(2,8); localStorage.setItem('tsr_room', room); }
+  $('room').value = room;
+
+  var last = 0, timer = null, presence = {}, curRoom = '';
+  var seen = {};                      // 已渲染过的消息 id
+  var xfer = 0;                       // 正在传输的文件数
+
+  function toast(s){
+    var d = document.createElement('div'); d.textContent = s;
+    $('toast').appendChild(d);
+    setTimeout(function(){ d.remove(); }, 3200);
+  }
+  function fmtSize(n){
+    if(n < 1024) return n + ' B';
+    if(n < 1048576) return (n/1024).toFixed(1) + ' KB';
+    if(n < 1073741824) return (n/1048576).toFixed(2) + ' MB';
+    return (n/1073741824).toFixed(2) + ' GB';
+  }
+  function fmtTime(t){
+    var d = new Date(t);
+    return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+  }
+  function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+
+  function addMsg(m){
+    if(seen[m.id]) return false;
+    seen[m.id] = 1;
+    var box = $('log'), el = document.createElement('div');
+    var who = m.side === 'web' ? '我 → 对方' : '对方 → 我';
+    var t = fmtTime(m.ts);
+    if(m.kind === 'file'){
+      var f = {}; try{ f = JSON.parse(m.body||'{}'); }catch(e){}
+      el.className = 'msg file ' + m.side;
+      el.innerHTML = '📎 <a href="'+API+'/api/file?fileId='+encodeURIComponent(f.fileId||'')+'" download="'+
+        esc(f.name||'file')+'">'+esc(f.name||'文件')+'</a>'+
+        '<div class="fmeta">'+fmtSize(f.size||0)+' · 点击下载（>20MB 请用分块接口）</div>'+
+        '<div class="meta">'+who+' · '+t+'</div>';
+    } else if(m.kind === 'sys'){
+      el.className = 'msg sys'; el.textContent = m.body || '';
+    } else {
+      el.className = 'msg ' + (m.side === 'web' ? 'web' : 'pc');
+      el.innerHTML = esc(m.body||'').replace(/\n/g,'<br>') + '<div class="meta">'+who+' · '+t+'</div>';
+    }
+    box.appendChild(el); box.scrollTop = box.scrollHeight;
+    if(m.side === 'pc' && m.kind === 'text' && document.hasFocus() === false && window.Notification &&
+       Notification.permission === 'granted'){
+      try{ new Notification('对方回复', { body: m.body }); }catch(e){}
+    }
+    return true;
+  }
+
+  /* -------------------- 轮询 -------------------- */
+  function poll(){
+    if(!curRoom) return;
+    fetch(API+'/api/pull?room='+encodeURIComponent(curRoom)+'&after='+last, {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(!d.ok) throw new Error(d.error||'拉取失败');
+        (d.msgs||[]).forEach(function(m){ if(addMsg(m)) last = Math.max(last, m.id); });
+        presence = d.presence || {};
+        renderPc(); renderFiles(d.files || []);
+      })
+      .catch(function(e){ setOffline(e.message); });
+  }
+
+  function renderPc(){
+    var p = presence.pc || null;
+    var online = !!(p && (Date.now() - p.ts < 90000));
+    $('dPc').className = 'dot ' + (online ? 'on' : 'off');
+    $('tPc').textContent = online ? '对方在线' : '对方离线';
+    $('sOn').innerHTML = online ? '<span class="pill ok">在线</span>' : '<span class="pill no">离线</span>';
+    $('sHost').textContent = (p && p.host) || '—';
+    $('sUser').textContent = (p && p.user) || '—';
+    $('sIp').textContent   = (p && p.ip) || '—';
+    $('sVer').textContent  = (p && p.ver) || '—';
+    $('sBeat').textContent = p ? fmtTime(p.ts) : '—';
+  }
+  function setOffline(msg){
+    $('dPc').className = 'dot off'; $('tPc').textContent = '服务不可达';
+    console.warn(msg);
+  }
+
+  var fileCache = [];
+  function renderFiles(list){
+    fileCache = list;
+    var box = $('files');
+    if(!list.length){ box.innerHTML = '<div class="hint">还没有文件</div>'; return; }
+    box.innerHTML = list.map(function(f){
+      var from = f.side === 'web' ? '我发出' : '对方发来';
+      return '<div class="frow"><div class="nm"><div>'+esc(f.name)+'</div>'+
+        '<div>'+fmtSize(f.size)+' · '+from+' · '+fmtTime(f.ts)+'</div></div>'+
+        '<a class="btn sm" href="'+API+'/api/file?fileId='+encodeURIComponent(f.id)+'" download="'+
+        esc(f.name)+'">下载</a></div>';
+    }).join('');
+  }
+
+  /* -------------------- 发送文本 -------------------- */
+  function sendText(){
+    var t = $('txt').value.trim();
+    if(!t || !curRoom) return;
+    $('txt').value = '';
+    fetch(API+'/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({room:curRoom, side:'web', kind:'text', body:t}),
+    }).then(function(r){ return r.json(); }).then(function(d){
+      if(d.ok) { addMsg({id:d.id, side:'web', kind:'text', body:t, ts:d.ts}); last = Math.max(last,d.id); }
+      else toast('发送失败：'+d.error);
+    }).catch(function(e){ toast('发送失败：'+e.message); });
+  }
+
+  /* -------------------- 发送文件（分块） -------------------- */
+  function uploadFile(file){
+    var CHUNK = 1180000;
+    var total = file.size, nchunk = Math.max(1, Math.ceil(total/CHUNK));
+    xfer++;
+    $('upHint').textContent = '正在上传 '+file.name+' …';
+    return fetch(API+'/api/upload/begin', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({room:curRoom, side:'web', name:file.name, size:total}),
+    }).then(function(r){ return r.json(); }).then(function(b){
+      if(!b.ok) throw new Error(b.error);
+      var chain = Promise.resolve();
+      for(var i=0;i<nchunk;i++){
+        (function(i){
+          chain = chain.then(function(){
+            var blob = file.slice(i*CHUNK, Math.min(total,(i+1)*CHUNK));
+            return fetch(API+'/api/upload/chunk?fileId='+b.fileId+'&i='+i, {
+              method:'PUT', body: blob,
+            }).then(function(r){ return r.json(); }).then(function(x){
+              if(!x.ok) throw new Error(x.error);
+              $('upBar').style.width = Math.round((i+1)/nchunk*100)+'%';
+            });
+          });
+        })(i);
+      }
+      return chain.then(function(){
+        return fetch(API+'/api/send', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({room:curRoom, side:'web', kind:'file',
+            body: JSON.stringify({fileId:b.fileId, name:file.name, size:total})}),
+        }).then(function(r){ return r.json(); });
+      }).then(function(d){
+        if(d.ok){
+          addMsg({id:d.id, side:'web', kind:'file', ts:d.ts,
+            body: JSON.stringify({fileId:b.fileId, name:file.name, size:total})});
+          last = Math.max(last, d.id);
+          toast('已发送 '+file.name+'（'+fmtSize(total)+'）');
+        }
+      });
+    }).catch(function(e){ toast('上传失败：'+e.message); })
+      .then(function(){
+        xfer--; $('upHint').textContent = '文件会切块上传，对方自动存到默认目录，不用确认';
+        setTimeout(function(){ $('upBar').style.width='0'; }, 800);
+      });
+  }
+
+  function pushFiles(fl){
+    var arr = Array.prototype.slice.call(fl);
+    var chain = Promise.resolve();
+    arr.forEach(function(f){ chain = chain.then(function(){ return uploadFile(f); }); });
+  }
+
+  /* -------------------- 连接 / 房间 -------------------- */
+  function connect(r){
+    r = (r||'').trim(); if(!r) return;
+    curRoom = r; last = 0; seen = {}; presence = {};
+    localStorage.setItem('tsr_room', r);
+    $('log').innerHTML = '';
+    $('tRoom').textContent = '房间 ' + r;
+    $('cmdBox').textContent =
+      'powershell -NoProfile -ExecutionPolicy Bypass -File notify-windows.ps1 -Room ' + r +
+      '\n# 或者: notify-windows.bat  ' + r;
+    fetch(API+'/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({room:r, side:'web', kind:'sys',
+        body:'控制台已连接（房间 ' + r + '）'}),
+    }).catch(function(){});
+    if(timer) clearInterval(timer);
+    poll();
+    timer = setInterval(poll, 2000);
+    toast('已连接房间 ' + r);
+  }
+
+  /* -------------------- 接口文档 -------------------- */
+  fetch(API+'/api', {cache:'no-store'}).then(function(r){ return r.json(); })
+    .then(function(d){ $('apiBox').textContent = JSON.stringify(d.api, null, 2); })
+    .catch(function(){ $('apiBox').textContent = '（接口清单加载失败，检查网络）'; });
+
+  /* -------------------- 事件 -------------------- */
+  $('btnSend').onclick = sendText;
+  $('btnRoom').onclick = function(){ connect($('room').value); };
+  $('txt').addEventListener('keydown', function(e){
+    if(e.ctrlKey && e.key === 'Enter'){ sendText(); }
+  });
+  $('btnFile').onclick = function(){ $('file').click(); };
+  $('file').onchange = function(){ if(this.files.length) pushFiles(this.files); this.value=''; };
+  $('btnCopyCmd').onclick = function(){
+    var t = $('cmdBox').textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+      .then(function(){ toast('命令已复制'); })
+      .catch(function(){ toast('复制失败，请手动选择'); });
+  };
+  $('btnNotify').onclick = function(){
+    if(!window.Notification) { toast('此浏览器不支持通知'); return; }
+    Notification.requestPermission().then(function(p){ toast('通知权限：'+p); });
+  };
+
+  // 拖拽整页接收文件
+  document.addEventListener('dragover', function(e){ e.preventDefault(); });
+  document.addEventListener('drop', function(e){
+    e.preventDefault();
+    if(e.dataTransfer && e.dataTransfer.files.length) pushFiles(e.dataTransfer.files);
+  });
+
+  /* ==================== 页签切换 ==================== */
+  var VIEWS = { chat:['viewChat','tabChat'], build:['viewBuild','tabBuild'], dev:['viewDev','tabDev'] };
+  function showView(n){
+    for(var k in VIEWS){
+      $(VIEWS[k][0]).className = 'view' + (k === n ? ' on' : '');
+      $(VIEWS[k][1]).className = (k === n ? 'on' : '');
+    }
+    if(n === 'dev') loadDev();
+    window.scrollTo(0, 0);
+  }
+  $('tabChat').onclick  = function(){ showView('chat');  };
+  $('tabBuild').onclick = function(){ showView('build'); };
+  $('tabDev').onclick   = function(){ showView('dev');   };
+
+  /* ==================== 生成部署包 ==================== */
+  $('bRoom').value = room;
+  $('bRelay').value = API;
+  $('bDoc').textContent =
+    '1) 左边填好房间号（和本页右上角一致）-> 点「生成 setup.zip」\n' +
+    '2) 再点「下载一键部署.bat」（Linux 就下 .sh）\n' +
+    '3) 把这两个文件放进同一个空文件夹，一起发给对方\n' +
+    '4) 对方双击 bat：自动解压 -> 装 Tailscale -> 入网 -> 开 SSH(你的公钥)\n' +
+    '   -> 装进标准目录 -> 开机自启 -> 启动消息通道\n' +
+    '   -> 把本机信息回传给你 -> 删掉下载目录里的 zip 和 bat\n' +
+    '   全程零输入，Windows 上最多弹一次 UAC。\n\n' +
+    '回执同时走两条路：\n' +
+    '  · 中继：本页「对话」里立刻能看到\n' +
+    '  · scp：直接落到你填的「回信落点」（需要你本机开着 sshd）';
+  $('bFlow').innerHTML =
+    '<b>安装位置</b><br>Windows: %LOCALAPPDATA%\\TailscaleRemote<br>' +
+    'Linux: ~/.local/share/tailscale-remote<br><br>' +
+    '<b>开机自启</b><br>Windows: 计划任务 TailscaleRemoteAgent（登录时启动）<br>' +
+    'Linux: crontab @reboot<br><br>' +
+    '<b>自清理</b><br>部署成功后删除下载目录里的 setup.zip 与引导脚本，' +
+    '解压临时目录一并清掉。勾选 -KeepSource 可保留（排障用）。<br><br>' +
+    '<b>卸载</b><br>本页「设备 / 远程清除」一键清除，或对方本机跑 clean 脚本。';
+
+  $('btnCopyKey').onclick = function(){
+    var t = $('keyCmd').textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+      .then(function(){ toast('已复制'); }).catch(function(){ toast('复制失败，手动选中'); });
+  };
+
+  function doBuild(){
+    var body = {
+      room:     $('bRoom').value.trim() || curRoom,
+      plat:     $('bPlat').value,
+      pub:      $('bPub').value.trim(),
+      authkey:  $('bAuth').value.trim(),
+      ctrlUser: $('bUser').value.trim(),
+      ctrlHost: $('bHost').value.trim(),
+      ctrlPath: $('bPath').value.trim() || 'Desktop',
+      relay:    $('bRelay').value.trim() || API,
+    };
+    if(!body.room){ toast('先填房间号'); return; }
+    $('bHint').textContent = '正在现场打包 …';
+    $('bdBar').style.width = '45%';
+    fetch(API + '/api/build', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body),
+    }).then(function(r){
+      if(!r.ok){
+        return r.text().then(function(t){
+          var m = ''; try{ m = JSON.parse(t).error; }catch(e){}
+          throw new Error(m || ('HTTP ' + r.status));
+        });
+      }
+      return r.blob();
+    }).then(function(blob){
+      var fn = 'setup-' + body.room + '.zip';
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = fn;
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+      $('bdBar').style.width = '100%';
+      $('bHint').innerHTML = '已生成 <b>' + fn + '</b>（' + fmtSize(blob.size) + '）。' +
+        '把 zip 和「一键部署.' + (body.plat === 'linux' ? 'sh' : 'bat') + '」放进同一个文件夹，双击即可。';
+      toast('部署包已下载');
+      setTimeout(function(){ $('bdBar').style.width = '0'; }, 1500);
+    }).catch(function(e){
+      $('bdBar').style.width = '0';
+      $('bHint').textContent = '打包失败：' + e.message;
+      toast('打包失败：' + e.message);
+    });
+  }
+  $('btnBuild').onclick = doBuild;
+
+  /* ==================== 设备 / 远程清除 ==================== */
+  var devCache = [];
+  function loadDev(){
+    $('devList').innerHTML = '<div class="tip">加载中…</div>';
+    fetch(API + '/api/devices', {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        devCache = d.devices || [];
+        var box = $('devList');
+        if(!devCache.length){
+          box.innerHTML = '<div class="tip">还没有设备上报过。先在对方机器上跑一次部署包。</div>';
+          return;
+        }
+        box.innerHTML = devCache.map(function(x, i){
+          return '<div class="devrow' + (x.online ? '' : ' off') + '"><div class="nm">' +
+            '<b>' + esc(x.host || '(未知主机)') + '</b> ' +
+            '<span class="pill ' + (x.online ? 'ok' : 'no') + '">' + (x.online ? '在线' : '离线') + '</span>' +
+            '<div>' + esc(x.user || '') + ' · ' + esc(x.ip || '') + ' · 房间 ' + esc(x.room) +
+            ' · ' + fmtTime(x.ts) + '</div>' +
+            '<div style="font-size:11px">' + esc(x.path || '') + '</div></div>' +
+            '<button class="btn sm" data-i="' + i + '">要信息</button>' +
+            '<button class="btn sm" data-s="' + i + '" style="background:#d97706;color:#fff;border:none">清除</button>' +
+            '<button class="btn sm" data-c="' + i + '" style="background:#dc2626;color:#fff;border:none">彻底清除</button>' +
+            '</div>';
+        }).join('');
+        // 清除(保留入网)
+        var bs = box.querySelectorAll('button[data-s]');
+        for(var j = 0; j < bs.length; j++){
+          bs[j].onclick = (function(b){ return function(){ confirmClean(devCache[+b.getAttribute('data-s')], true); }; })(bs[j]);
+        }
+        // 彻底清除(含退出 tailnet)
+        var bc = box.querySelectorAll('button[data-c]');
+        for(var j2 = 0; j2 < bc.length; j2++){
+          bc[j2].onclick = (function(b){ return function(){ confirmClean(devCache[+b.getAttribute('data-c')], false); }; })(bc[j2]);
+        }
+        var bi = box.querySelectorAll('button[data-i]');
+        for(var k2 = 0; k2 < bi.length; k2++){
+          bi[k2].onclick = (function(b){ return function(){ askInfo(devCache[+b.getAttribute('data-i')]); }; })(bi[k2]);
+        }
+      })
+      .catch(function(e){
+        $('devList').innerHTML = '<div class="tip">加载失败：' + esc(e.message) + '</div>';
+      });
+  }
+  $('btnRefreshDev').onclick = loadDev;
+
+  function postCmd(d, cmd, extra){
+    var body = { cmd: cmd };
+    if(extra) for(var k in extra) body[k] = extra[k];
+    return fetch(API + '/api/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({room:d.room, side:'web', kind:'cmd', body: JSON.stringify(body)}),
+    }).then(function(r){ return r.json(); })
+      .then(function(x){ return !!x.ok; })
+      .catch(function(){ return false; });
+  }
+  function confirmClean(d, keepTs){
+    var nm = d.host || d.room;
+    var what = keepTs
+      ? '清除【保留 Tailscale 入网】\n\n移除开机任务、撤销你的公钥、删除安装目录。\n对方仍能连 tailnet，只是不再被本工具管理。'
+      : '彻底清除\n\n在上面基础上再退出 tailnet。\n对方会掉出你的网络，需要重新登录才能再连。';
+    if(!window.confirm('对 ' + nm + ' 执行：\n\n' + what)) return;
+    postCmd(d, 'cleanup', { keepTailscale: !!keepTs }).then(function(okd){
+      toast(okd ? ('指令已下发给 ' + nm) : '下发失败');
+      setTimeout(loadDev, 2500);
+    });
+  }
+  function askInfo(d){
+    postCmd(d, 'info').then(function(okd){
+      toast(okd ? '已请求上报，切回「对话」看回执' : '下发失败');
+      showView('chat');
+    });
+  }
+
+  connect(room);
+})();
+</script>
+</body>
+</html>

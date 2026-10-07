@@ -53,3 +53,8 @@ builder/*.bak*
 builder/.pyqt5-probe.json
 builder/.toolbox*.pid
 builder/_ui_preview/
+
+# 网页控制台 (web-console): wrangler 本地缓存与依赖, 不入库
+web-console/.wrangler/
+web-console/**/.wrangler/
+web-console/**/node_modules/

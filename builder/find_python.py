@@ -62,7 +62,10 @@ def _try(path_or_cmd, is_cmd=False):
     argv = ([path_or_cmd, "-c", "import PyQt5.QtWidgets"]
             if is_cmd else [path_or_cmd, "-c", "import PyQt5.QtWidgets"])
     try:
-        r = subprocess.run(argv, capture_output=True, timeout=25, env=_clean_env())
+        r = subprocess.run(argv, capture_output=True, timeout=25,
+                           env=_clean_env(),
+                           # 探测会跑很多次, 每次都不能弹黑框
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except Exception:      # noqa: BLE001  路径不存在 / 权限 / 超时
         return None
     if r.returncode != 0:

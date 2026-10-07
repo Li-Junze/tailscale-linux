@@ -1,0 +1,14 @@
+name = "ts-remote-relay"
+main = "src/index.js"
+compatibility_date = "2025-09-23"
+workers_dev = true
+
+# 消息 / 文件元数据 / 分块存储都在这一个 D1 库里。
+# (R2 需要先在 Cloudflare 控制台开通, 未开通时用 D1 分块替代, 效果一样)
+[[d1_databases]]
+binding = "DB"
+database_name = "ts-remote-db"
+database_id = "c191eac8-3fd8-4023-8030-c52eca8d2338"
+
+[observability]
+enabled = false
