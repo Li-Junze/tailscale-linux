@@ -16,6 +16,8 @@
 
 const CHUNK = 1180000;                 // 1.18MB / 块 —— D1 单行上限 2MB
 const KEEP_DAYS = 7;
+const LOBBY = 'lobby';                 // 默认大厅: 不建房间的包都进这里
+const ONLINE_MS = 75000;               // 心跳超过这个时间算离线(agent 每 15~30s 一次)
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -37,6 +39,85 @@ const bad = (m, s = 400) => json({ ok: false, error: m }, s);
 const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-5);
 const sideOf = (s) => (String(s) === 'pc' ? 'pc' : 'web');
 
+/* ---------------------- 自动生成 SSH 密钥对 ----------------------
+   网页在云端, 拿不到你本机, 所以干脆在服务端生成 ed25519 密钥对:
+   公钥烘焙进部署包(被控端免密), 私钥当场下载给你(用来 ssh 上去)。
+   格式必须能直接被 OpenSSH 用, 所以这里手写 openssh-key-v1 容器。 */
+function u32be(n) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, n >>> 0, false);
+  return b;
+}
+function sshStr(s) {                    // SSH wire 格式: uint32 长度 + 内容
+  const t = new TextEncoder().encode(s);
+  const o = new Uint8Array(4 + t.length);
+  o.set(u32be(t.length), 0); o.set(t, 4);
+  return o;
+}
+function sshBytes(b) {
+  const o = new Uint8Array(4 + b.length);
+  o.set(u32be(b.length), 0); o.set(b, 4);
+  return o;
+}
+function cat(...parts) {
+  const n = parts.reduce((a, p) => a + p.length, 0);
+  const o = new Uint8Array(n); let i = 0;
+  for (const p of parts) { o.set(p, i); i += p.length; }
+  return o;
+}
+function b64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+  return btoa(s);
+}
+function b64wrap(s) {
+  const lines = s.match(/.{1,70}/g) || [];
+  return '-----BEGIN OPENSSH PRIVATE KEY-----\n' + lines.join('\n') +
+         '\n-----END OPENSSH PRIVATE KEY-----\n';
+}
+function sshPubLine(pubRaw, comment) {
+  return 'ssh-ed25519 ' + b64(cat(sshStr('ssh-ed25519'), sshBytes(pubRaw))) +
+         (comment ? ' ' + comment : '');
+}
+function sshPrivPem(seed, pubRaw, comment) {
+  const pubBlob = cat(sshStr('ssh-ed25519'), sshBytes(pubRaw));
+  const privBlob = cat(seed, pubRaw);                       // 64B: seed||pub
+  const chk = crypto.getRandomValues(new Uint8Array(4));
+  let sec = cat(chk, chk, sshStr('ssh-ed25519'), sshBytes(pubRaw),
+                sshBytes(privBlob), sshStr(comment || ''));
+  const pad = 8 - (sec.length % 8);                          // none 加密, 块长 8
+  if (pad > 0 && pad < 8) {
+    const p = new Uint8Array(sec.length + pad);
+    p.set(sec, 0);
+    for (let i = 0; i < pad; i++) p[sec.length + i] = i + 1;
+    sec = p;
+  }
+  return b64wrap(b64(cat(
+    new TextEncoder().encode('openssh-key-v1\0'),
+    sshStr('none'), sshStr('none'), sshStr(''),
+    u32be(1), sshBytes(pubBlob), sshBytes(sec)
+  )));
+}
+async function keygen(env, b) {
+  const comment = String(b && b.comment || 'ts-remote-control').slice(0, 60);
+  let kp;
+  try {
+    kp = await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify']);
+  } catch (e) {
+    return bad('运行时不支持 Ed25519：' + (e && e.message ? e.message : e), 500);
+  }
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+  const seed = pkcs8.slice(-32);                             // ed25519 PKCS#8 末 32B 是 seed
+  const pubRaw = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
+  return ok({
+    pub: sshPubLine(pubRaw, comment),
+    priv: sshPrivPem(seed, pubRaw, comment),
+    fp: 'SHA256:' + b64(new Uint8Array(await crypto.subtle.digest('SHA-256', pubRaw)))
+                      .replace(/=+$/, ''),
+    type: 'ed25519',
+  });
+}
+
 let READY = false;
 async function schema(env) {
   if (READY) return;
@@ -55,6 +136,14 @@ async function schema(env) {
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS presence(
        room TEXT NOT NULL, side TEXT NOT NULL, ts INTEGER NOT NULL,
        info TEXT, PRIMARY KEY(room, side))`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS acl(
+       kind TEXT NOT NULL, val TEXT NOT NULL, ts INTEGER NOT NULL,
+       PRIMARY KEY(kind, val))`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS bridge_task(
+       id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL, host TEXT NOT NULL,
+       type TEXT NOT NULL, args TEXT, status TEXT NOT NULL DEFAULT 'new',
+       out TEXT, ts INTEGER NOT NULL)`),
+    env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_bridge ON bridge_task(token, id)`),
   ]);
   READY = true;
 }
@@ -143,8 +232,7 @@ async function grabAsset(context, path) {
 
 /* ---------------------- 生成部署包 ---------------------- */
 async function buildPkg(context, b) {
-  const room = String(b.room || '').trim();
-  if (!room) return bad('缺少房间号 room');
+  const room = String(b.room || '').trim() || LOBBY;   // 留空就进默认大厅
   const relay    = String(b.relay || 'https://ts-remote-web.pages.dev').replace(/\/+$/, '');
   const ctrlUser = String(b.ctrlUser || '').trim();
   const ctrlHost = String(b.ctrlHost || '').trim();
@@ -152,6 +240,14 @@ async function buildPkg(context, b) {
   const pub      = String(b.pub || '').trim();
   const authkey  = String(b.authkey || '').trim();
   const plat     = (String(b.plat || 'win') === 'linux') ? 'linux' : 'win';
+
+  // 每个包现场签一个设备令牌: 门禁只放行持有令牌的被控端, 否则 agent 自己也被挡在门外
+  const ptok = 'p' + rid();
+  try {
+    await context.env.DB.prepare(
+      'INSERT OR REPLACE INTO acl(kind, val, ts) VALUES(?,?,?)'
+    ).bind('tok', ptok, Date.now()).run();
+  } catch (e) { /* 表还没建好就退化成无令牌, 不让打包失败 */ }
 
   const dec = new TextDecoder('utf-8');
   const enc = new TextEncoder();
@@ -171,7 +267,7 @@ async function buildPkg(context, b) {
     let s = stripBom(dec.decode(await grabAsset(context, 'install.sh')));
     s = s.split('__ROOM__').join(room).split('__RELAY__').join(relay)
          .split('__CTRL_USER__').join(ctrlUser).split('__CTRL_HOST__').join(ctrlHost)
-         .split('__CTRL_PATH__').join(ctrlPath);
+         .split('__CTRL_PATH__').join(ctrlPath).split('__PTOK__').join(ptok);
     push('install.sh', s, false);
     push('notify.sh', stripBom(dec.decode(await grabAsset(context, 'notify.sh'))), false);
     push('clean.sh', stripBom(dec.decode(await grabAsset(context, 'clean.sh'))), false);
@@ -179,7 +275,7 @@ async function buildPkg(context, b) {
     let s = stripBom(dec.decode(await grabAsset(context, 'install.ps1')));
     s = s.split('__ROOM__').join(room).split('__RELAY__').join(relay)
          .split('__CTRL_USER__').join(ctrlUser).split('__CTRL_HOST__').join(ctrlHost)
-         .split('__CTRL_PATH__').join(ctrlPath);
+         .split('__CTRL_PATH__').join(ctrlPath).split('__PTOK__').join(ptok);
     push('install.ps1', s);
     push('notify.ps1', stripBom(dec.decode(await grabAsset(context, 'notify.ps1'))));
     push('clean.ps1', stripBom(dec.decode(await grabAsset(context, 'clean.ps1'))));
@@ -225,22 +321,220 @@ async function buildPkg(context, b) {
   });
 }
 
-/* ---------------------- 已注册设备(供网页远程清除) ---------------------- */
+/* ---------------------- 已注册设备(供网页远程清除) ----------------------
+   ★ 同一台机器可能在多个房间上报过(测试包、单独会话...)，按 主机|用户|IP 合并,
+     只留最新一条, 否则列表里会出现一堆同名重复项。
+   ★ room 取最新心跳那条 —— 下发指令要发到它当前正在听的房间。 */
 async function devices(env) {
   const rows = await env.DB.prepare(
-    `SELECT room, side, ts, info FROM presence WHERE side='pc' ORDER BY ts DESC LIMIT 200`
+    `SELECT room, side, ts, info FROM presence WHERE side='pc' ORDER BY ts DESC LIMIT 500`
   ).all();
-  const list = [];
+  const map = new Map();
+  const now = Date.now();
   for (const r of (rows.results || [])) {
     let info = {};
     try { info = r.info ? JSON.parse(r.info) : {}; } catch (e) { info = {}; }
+    const host = info.host || '', user = info.user || '', ip = info.ip || '';
+    // ★ 优先按主机名合并: 同一个 host 就是同一台机器。
+    //   早期上报可能缺 ip、甚至缺 user, 把那些字段放进键里会把一台机器
+    //   拆成好几条 —— 这正是"列表里乱七八糟很多个"的根源。
+    const key = host ? host : ((user || ip) ? (user + '|' + ip) : ('room:' + r.room));
+    const cur = map.get(key);
+    if (!cur) {
+      map.set(key, { key, room: r.room, ts: r.ts, rooms: [r.room], host, user, ip,
+                     path: info.path || '', ver: info.ver || '' });
+      continue;
+    }
+    if (r.ts > cur.ts) { cur.ts = r.ts; cur.room = r.room; }
+    if (cur.rooms.indexOf(r.room) < 0) cur.rooms.push(r.room);
+    // 后来的上报可能补全了空字段
+    if (!cur.ip && ip) cur.ip = ip;
+    if (!cur.path && info.path) cur.path = info.path;
+    if (!cur.ver && info.ver) cur.ver = info.ver;
+  }
+  const list = [];
+  let stale = 0;
+  for (const d of map.values()) {
+    const age = now - d.ts;
+    if (age > 86400000) stale++;
     list.push({
-      room: r.room, ts: r.ts, online: Date.now() - r.ts < 90000,
-      host: info.host || '', user: info.user || '', ip: info.ip || '',
-      path: info.path || '', ver: info.ver || '',
+      room: d.room, rooms: d.rooms, ts: d.ts, age,
+      online: age < ONLINE_MS,
+      host: d.host, user: d.user, ip: d.ip, path: d.path, ver: d.ver,
     });
   }
-  return ok({ devices: list, now: Date.now() });
+  list.sort((a, b) => (b.online - a.online) || (b.ts - a.ts));
+  return ok({ devices: list, now, onlineMs: ONLINE_MS, stale });
+}
+
+/* 清理僵尸条目: 指定房间, 或所有 24h 没心跳的 */
+async function forget(env, b) {
+  const body = b || {};
+  if (body.old) {
+    const r = await env.DB.prepare(
+      'DELETE FROM presence WHERE side=? AND ts < ?'
+    ).bind('pc', Date.now() - 86400000).run();
+    return ok({ deleted: (r.meta && r.meta.changes) || 0, mode: 'old' });
+  }
+  const room = String(body.room || '').trim();
+  if (!room) return bad('需要 room 或 old:true');
+  const r = await env.DB.prepare(
+    'DELETE FROM presence WHERE room=? AND side=?'
+  ).bind(room, 'pc').run();
+  return ok({ deleted: (r.meta && r.meta.changes) || 0, room });
+}
+
+/* ---------------------- 控制端本机信息(免手填) ----------------------
+   网页在云端, 看不到你本机的 IP / 用户名 / 公钥。给一个一次性 token,
+   你在本机跑一条命令把这些信息 POST 上来, 网页自动填进表单。
+   authkey 默认不上传(敏感), 只有你显式带上才收。 */
+async function ctrlGet(env, url) {
+  const token = String(url.searchParams.get('token') || '').trim();
+  if (!token) return bad('缺少 token');
+  const r = await env.DB.prepare(
+    'SELECT ts, info FROM presence WHERE room=? AND side=?'
+  ).bind('ctrl-' + token, 'ctrl').first();
+  if (!r) return ok({ found: false });
+  let info = {};
+  try { info = r.info ? JSON.parse(r.info) : {}; } catch (e) { info = {}; }
+  return ok({ found: true, ts: r.ts, info });
+}
+async function ctrlPost(env, b) {
+  const token = String((b && b.token) || '').trim();
+  if (!token) return bad('缺少 token');
+  const info = (b && b.info) || {};
+  const clean = {
+    host: String(info.host || '').slice(0, 80),
+    user: String(info.user || '').slice(0, 80),
+    ip: String(info.ip || '').slice(0, 60),
+    pub: String(info.pub || '').slice(0, 1200),
+    tsip: String(info.tsip || '').slice(0, 60),
+    ver: String(info.ver || '').slice(0, 40),
+  };
+  if (b && b.authkey) clean.authkey = String(b.authkey).slice(0, 300);
+  await env.DB.prepare(
+    `INSERT INTO presence(room, side, ts, info) VALUES(?,?,?,?)
+     ON CONFLICT(room, side) DO UPDATE SET ts=excluded.ts, info=excluded.info`
+  ).bind('ctrl-' + token, 'ctrl', Date.now(), JSON.stringify(clean)).run();
+  return ok({ saved: true });
+}
+
+/* ---------------------- 门禁: 令牌签发 + IP 白名单 ---------------------- */
+async function newTok(env) {
+  const t = 't' + rid();
+  await env.DB.prepare('INSERT OR REPLACE INTO acl(kind, val, ts) VALUES(?,?,?)')
+    .bind('tok', t, Date.now()).run();
+  return ok({ tok: t });
+}
+async function aclList(env, request) {
+  const rows = await env.DB.prepare(
+    "SELECT val, ts FROM acl WHERE kind='ip' ORDER BY ts DESC LIMIT 50"
+  ).all();
+  const ips = (rows.results || []).map((r) => ({
+    ip: r.val, ts: r.ts, days: Math.round((30 * 86400000 - (Date.now() - r.ts)) / 86400000),
+  }));
+  return ok({ ips, me: request.headers.get('CF-Connecting-IP') || '' });
+}
+async function aclEdit(env, b, request) {
+  if (b.addIp) {
+    const ip = request.headers.get('CF-Connecting-IP') || '';
+    if (!ip) return bad('拿不到你的出口 IP');
+    await env.DB.prepare('INSERT OR REPLACE INTO acl(kind, val, ts) VALUES(?,?,?)')
+      .bind('ip', ip, Date.now()).run();
+    return ok({ added: ip });
+  }
+  if (b.delIp) {
+    await env.DB.prepare('DELETE FROM acl WHERE kind=? AND val=?').bind('ip', String(b.delIp)).run();
+    return ok({ deleted: String(b.delIp) });
+  }
+  if (b.addTok) {                         // 给本机桥接/上报通道开一个令牌(可看页面/下脚本)
+    const t = String(b.addTok).slice(0, 40);
+    await env.DB.prepare('INSERT OR REPLACE INTO acl(kind, val, ts) VALUES(?,?,?)')
+      .bind('btok', t, Date.now()).run();
+    return ok({ tok: t });
+  }
+  if (b.code) {                           // 换授权码: 只存哈希, 不存明文
+    const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(b.code)));
+    const h = [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, '0')).join('');
+    await env.DB.prepare('DELETE FROM acl WHERE kind=?').bind('code').run();
+    await env.DB.prepare('INSERT OR REPLACE INTO acl(kind, val, ts) VALUES(?,?,?)')
+      .bind('code', h, Date.now()).run();
+    return ok({ changed: true });
+  }
+  return bad('需要 addIp / delIp / addTok / code');
+}
+
+/* ---------------------- 控制端桥接(接已有的 SSH 连接) ----------------------
+   浏览器自己不能 SSH。所以在你本机跑一个小桥接进程:
+     它读 ~/.ssh/config -> 探测哪些主机现在连得上 -> 上报到网页;
+     网页下发任务(部署/执行/卸载) -> 它用 ssh/scp 去干 -> 结果回传网页。
+   桥接只在你本机跑, 不需要在对方机器上预装任何东西。 */
+async function bridgeHello(env, b) {
+  const token = String((b && b.token) || '').trim();
+  if (!token) return bad('缺少 token');
+  const hosts = (b && Array.isArray(b.hosts)) ? b.hosts.slice(0, 200).map((h) => ({
+    alias: String(h.alias || '').slice(0, 80),
+    user: String(h.user || '').slice(0, 80),
+    host: String(h.host || '').slice(0, 120),
+    os: String(h.os || '').slice(0, 20),
+    ok: !!h.ok,
+    note: String(h.note || '').slice(0, 200),
+  })) : [];
+  await env.DB.prepare(
+    `INSERT INTO presence(room, side, ts, info) VALUES(?,?,?,?)
+     ON CONFLICT(room, side) DO UPDATE SET ts=excluded.ts, info=excluded.info`
+  ).bind('bridge-' + token, 'bridge', Date.now(), JSON.stringify({ hosts })).run();
+  return ok({ saved: true, n: hosts.length });
+}
+async function bridgeGet(env, url) {
+  const token = String(url.searchParams.get('token') || '').trim();
+  if (!token) return bad('缺少 token');
+  const r = await env.DB.prepare(
+    'SELECT ts, info FROM presence WHERE room=? AND side=?'
+  ).bind('bridge-' + token, 'bridge').first();
+  if (!r) return ok({ online: false, hosts: [] });
+  let info = {};
+  try { info = r.info ? JSON.parse(r.info) : {}; } catch (e) { info = {}; }
+  const tasks = await env.DB.prepare(
+    'SELECT id, host, type, status, ts, out FROM bridge_task WHERE token=? ORDER BY id DESC LIMIT 30'
+  ).bind(token).all();
+  return ok({
+    online: Date.now() - r.ts < 120000, ts: r.ts,
+    hosts: info.hosts || [], tasks: tasks.results || [],
+  });
+}
+async function bridgeTask(env, b) {
+  const token = String((b && b.token) || '').trim();
+  const host = String((b && b.host) || '').trim();
+  const type = String((b && b.type) || '').trim();
+  if (!token || !host || !type) return bad('需要 token/host/type');
+  if (!['deploy', 'exec', 'remove', 'probe'].includes(type)) return bad('任务类型不合法: ' + type);
+  const r = await env.DB.prepare(
+    'INSERT INTO bridge_task(token, host, type, args, status, ts) VALUES(?,?,?,?,?,?)'
+  ).bind(token, host, type, JSON.stringify((b && b.args) || {}).slice(0, 4000), 'new', Date.now()).run();
+  return ok({ id: r.meta.last_row_id, queued: true });
+}
+async function bridgePoll(env, url) {
+  const token = String(url.searchParams.get('token') || '').trim();
+  if (!token) return bad('缺少 token');
+  const rows = await env.DB.prepare(
+    "SELECT id, host, type, args FROM bridge_task WHERE token=? AND status='new' ORDER BY id LIMIT 10"
+  ).bind(token).all();
+  const out = [];
+  for (const r of (rows.results || [])) {
+    let args = {};
+    try { args = r.args ? JSON.parse(r.args) : {}; } catch (e) { args = {}; }
+    await env.DB.prepare("UPDATE bridge_task SET status='run' WHERE id=?").bind(r.id).run();
+    out.push({ id: r.id, host: r.host, type: r.type, args });
+  }
+  return ok({ tasks: out });
+}
+async function bridgeResult(env, b) {
+  const id = parseInt((b && b.id), 10) || 0;
+  if (!id) return bad('缺少 id');
+  await env.DB.prepare('UPDATE bridge_task SET status=?, out=? WHERE id=?')
+    .bind((b && b.ok) ? 'done' : 'fail', String((b && b.out) || '').slice(0, 8000), id).run();
+  return ok({ saved: true });
 }
 
 /* ------------------------------ 路由 ------------------------------ */
@@ -255,7 +549,23 @@ export async function onRequest(context) {
     await schema(env);
 
     if (p === '/api/build' && request.method === 'POST') return buildPkg(context, await request.json());
+    if (p === '/api/keygen' && request.method === 'POST') return keygen(env, await request.json().catch(() => ({})));
+    if (p === '/api/tok' && request.method === 'POST') return newTok(env);
+    if (p === '/api/acl') {
+      if (request.method === 'POST') return aclEdit(env, await request.json(), request);
+      return aclList(env, request);
+    }
     if (p === '/api/devices') return devices(env);
+    if (p === '/api/forget' && request.method === 'POST') return forget(env, await request.json());
+    if (p === '/api/ctrl') {
+      if (request.method === 'POST') return ctrlPost(env, await request.json());
+      return ctrlGet(env, url);
+    }
+    if (p === '/api/bridge' && request.method === 'POST') return bridgeHello(env, await request.json());
+    if (p === '/api/bridge') return bridgeGet(env, url);
+    if (p === '/api/bridge/task' && request.method === 'POST') return bridgeTask(env, await request.json());
+    if (p === '/api/bridge/tasks') return bridgePoll(env, url);
+    if (p === '/api/bridge/result' && request.method === 'POST') return bridgeResult(env, await request.json());
     if (p === '/api/send' && request.method === 'POST') return send(env, await request.json());
     if (p === '/api/beat' && request.method === 'POST') return beat(env, await request.json());
     if (p === '/api/pull') return pull(env, url);
@@ -438,14 +748,22 @@ async function gc(env) {
 
 const API_DOC = {
   说明: '被控端 agent 与网页共用同一套接口, 全部 JSON 或裸字节, 无需 SDK/登录',
-  约定: { room: '房间号(配对凭证)', side: "'web'=网页端 | 'pc'=被控端", after: '增量拉取用的上一条消息 id' },
+  约定: {
+    room: '房间号; 不填或填 lobby 即默认大厅(所有新装的机器都进大厅, 想单独聊才建房间)',
+    side: "'web'=网页端 | 'pc'=被控端 | 'ctrl'=控制端本机信息",
+    after: '增量拉取用的上一条消息 id',
+  },
   接口: {
     'GET /api/hello': '存活探测',
     'GET /api': '本清单',
-    'POST /api/build': '{room,relay?,ctrlUser?,ctrlHost?,ctrlPath?,pub?,authkey?,plat:win|linux} -> 现场生成部署包 zip(二进制流)',
-    'GET /api/devices': '最近上报过的被控端列表(供网页远程清除)',
+    'POST /api/build': '{room?,relay?,ctrlUser?,ctrlHost?,ctrlPath?,pub?,authkey?,plat:win|linux} -> 现场生成部署包 zip(二进制流)',
+    'POST /api/keygen': '{} -> {pub,priv,fp} 服务端生成 ed25519 密钥对, priv 是能直接给 ssh 用的 OpenSSH 私钥',
+    'GET /api/devices': '被控端列表(按 主机|用户|IP 去重, 只留最新心跳那条)',
+    'POST /api/forget': '{room} 删掉该房间的上报记录; {old:true} 清掉 24h 没心跳的僵尸',
+    'GET /api/ctrl?token=': '取控制端本机信息(网页自动填表单用)',
+    'POST /api/ctrl': '{token,info:{host,user,ip,pub,tsip},authkey?} 控制端上报本机信息(authkey 默认不上云)',
     'POST /api/send': '{room,side,kind:text|file|cmd|sys,body} 发消息',
-    '下发指令(kind=cmd)': 'body 为 JSON {"cmd":"info"|"restart"|"cleanup"}, 只认白名单, 不做通用 shell',
+    '下发指令(kind=cmd)': 'body 为 JSON {"cmd":"info"|"join"|"restart"|"cleanup"}, 只认白名单, 不做通用 shell',
     'POST /api/beat': '{room,side,info:{host,user,ip,ver}} 心跳+上报信息(每15s)',
     'GET /api/pull?room=&after=': '增量拉消息, 返回 {msgs,files,presence}',
     'GET /api/state?room=': '在线状态 + 消息总数',

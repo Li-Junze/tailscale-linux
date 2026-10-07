@@ -12,6 +12,7 @@ param(
     [string]$ControlUser = '__CTRL_USER__',     # 控制端 ssh 用户名(用于 scp 回传)
     [string]$ControlHost = '__CTRL_HOST__',     # 控制端 tailscale IP
     [string]$ControlPath = '__CTRL_PATH__',
+    [string]$PTok        = '__PTOK__',      # 设备令牌(控制台门禁用, 没它 agent 发不出心跳)
     [string]$InstallDir  = '',      # 标准安装目录(引导脚本传入, 避免提权后变量漂移)
     [string]$SourceDir   = '',      # 外层引导所在目录(部署完要清掉的临时物)
     [switch]$KeepSource,            # 保留下载目录里的 zip/引导脚本(排障用)
@@ -35,9 +36,15 @@ function Banner($m) { Write-Host ''; Write-Host "==== $m ====" -ForegroundColor 
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
 
 # ---------------------------------------------------------------- HTTP(回传用)
+function Add-Tok([string]$url) {
+    if (-not $PTok) { return $url }
+    if ($url -match '[?&]t=') { return $url }
+    if ($url -match '\?') { return ($url + '&t=' + $PTok) }
+    return ($url + '?t=' + $PTok)
+}
 function Http-Json([string]$url, [string]$method = 'GET', $obj = $null) {
     try {
-        $r = [Net.HttpWebRequest]::Create($url)
+        $r = [Net.HttpWebRequest]::Create((Add-Tok $url))
         $r.Method = $method; $r.Timeout = 20000; $r.ReadWriteTimeout = 60000
         $r.UserAgent = "ts-remote-install/$VER"
         if ($null -ne $obj) {
@@ -185,7 +192,7 @@ function Move-ToInstallDir {
     if ($rc -ge 8) { Say "  [!] 复制返回 $rc, 但通常仍可用" 'Yellow' }
     $ini = Join-Path $InstallDir 'agent.ini'
     @("room=$Room", "relay=$Relay", "installdir=$InstallDir",
-      "host=$env:COMPUTERNAME", "user=$env:USERNAME",
+      "host=$env:COMPUTERNAME", "user=$env:USERNAME", "token=$PTok",
       "control=$ControlUser@$ControlHost", "installed=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')") |
         Set-Content -Path $ini -Encoding UTF8
     Say "  [OK] 已安装到: $InstallDir" 'Green'

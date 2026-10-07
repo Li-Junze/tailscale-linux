@@ -37,6 +37,15 @@ function Load-Ini {
 $iniCfg = Load-Ini
 if (-not $Room)  { $Room  = [string]$iniCfg['room'] }
 if ($Relay -eq 'https://ts-remote-web.pages.dev' -and $iniCfg['relay']) { $Relay = [string]$iniCfg['relay'] }
+# 设备令牌: 控制台有门禁, 没令牌连心跳都发不出去。ini -> install.ps1 烘焙值 两级取
+$PTok = [string]$iniCfg['token']
+if (-not $PTok) {
+    $ipf = Join-Path $ScriptDir 'install.ps1'
+    if (Test-Path $ipf) {
+        $tt = Get-Content $ipf -Raw -ErrorAction SilentlyContinue
+        if ($tt -and $tt -match "\[string\]\`$PTok\s*=\s*'([^']+)'") { $PTok = $Matches[1] }
+    }
+}
 # 第三级回退: ini 丢了(比如被清理误删)就从 install.ps1 的烘焙参数里抠出房间号,
 # 保证 agent 永远能自举, 不会因为缺一个配置文件就彻底失联。
 if (-not $Room) {
@@ -78,8 +87,15 @@ function New-Req([string]$url, [string]$method) {
     $r.UserAgent = "ts-remote-agent/$AGENT_VER"
     return $r
 }
+# 所有请求自动带上设备令牌(控制台有门禁, 没有它连心跳都会被 401)
+function Add-Tok([string]$url) {
+    if (-not $PTok) { return $url }
+    if ($url -match '[?&]t=') { return $url }
+    if ($url -match '\?') { return ($url + '&t=' + $PTok) }
+    return ($url + '?t=' + $PTok)
+}
 function Http-Json([string]$url, [string]$method = 'GET', $obj = $null) {
-    $req = New-Req $url $method
+    $req = New-Req (Add-Tok $url) $method
     if ($null -ne $obj) {
         $bytes = [Text.Encoding]::UTF8.GetBytes(($obj | ConvertTo-Json -Compress -Depth 6))
         $req.ContentType = 'application/json; charset=utf-8'
@@ -92,7 +108,7 @@ function Http-Json([string]$url, [string]$method = 'GET', $obj = $null) {
     return ($txt | ConvertFrom-Json)
 }
 function Http-PutBytes([string]$url, [byte[]]$bytes) {
-    $req = New-Req $url 'PUT'
+    $req = New-Req (Add-Tok $url) 'PUT'
     $req.ContentType = 'application/octet-stream'
     $req.ContentLength = $bytes.Length
     $s = $req.GetRequestStream(); $s.Write($bytes, 0, $bytes.Length); $s.Close()
@@ -102,7 +118,7 @@ function Http-PutBytes([string]$url, [byte[]]$bytes) {
     return ($txt | ConvertFrom-Json)
 }
 function Http-GetBytes([string]$url) {
-    $req = New-Req $url 'GET'
+    $req = New-Req (Add-Tok $url) 'GET'
     $resp = $req.GetResponse()
     $ms = New-Object IO.MemoryStream
     $resp.GetResponseStream().CopyTo($ms)
@@ -188,6 +204,25 @@ function Invoke-RemoteCmd([string]$body) {
             $tstr = if ($t) { 'yes' } else { 'no' }
             Send-Text ("[info] host=$env:COMPUTERNAME user=$env:USERNAME ip=" + ($ips -join ',') +
                        " path=$ScriptDir autostart=$tstr") 'sys'
+        }
+        'join' {
+            # 远程补 authkey 入网: 打包时没填 authkey 也能事后一键拉进 tailnet, 对方零交互
+            $k = [string]$o.authkey
+            $ts = 'C:\Program Files\Tailscale\tailscale.exe'
+            if (-not $k) { Send-Text '[sys] join 指令缺少 authkey' 'sys'; break }
+            if (-not (Test-Path $ts)) { Send-Text '[sys] 本机没装 Tailscale, 无法入网' 'sys'; break }
+            Send-Text '[sys] 收到入网指令, 正在加入 tailnet ...' 'sys'
+            $out = ''
+            try { $out = (& $ts up --authkey=$k --accept-routes 2>&1 | Out-String) } catch { $out = $_.Exception.Message }
+            Start-Sleep -Seconds 5
+            $ip = ''
+            try {
+                $ip = @(Get-NetIPAddress -AddressFamily IPv4 -EA SilentlyContinue |
+                        Where-Object { $_.IPAddress -like '100.*' } |
+                        ForEach-Object { $_.IPAddress }) -join ','
+            } catch { }
+            if ($ip) { Send-Text "[sys] 入网成功, 本机 Tailscale IP = $ip" 'sys' }
+            else     { Send-Text ("[sys] 入网命令已执行但还没拿到 100.x 地址`r`n" + $out.Trim()) 'sys' }
         }
         'restart' {
             Send-Text '[sys] agent 即将重启' 'sys'

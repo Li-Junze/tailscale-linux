@@ -144,9 +144,15 @@ pre{background:#0b1220;color:#dce7f8;padding:12px;border-radius:12px;overflow:au
   </div>
   <div class="grow"></div>
   <div class="roombox">
-    <label>房间号</label>
+    <label>会话</label>
     <input id="room" maxlength="12" spellcheck="false">
     <button id="btnRoom">连接</button>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button id="btnLobby" style="background:rgba(255,255,255,.2);color:#fff;border:1px solid rgba(255,255,255,.5);
+      border-radius:10px;padding:9px 14px;font-weight:700;cursor:pointer">大厅</button>
+    <button id="btnNewRoom" style="background:#fff;color:#1e3a8a;border:none;border-radius:10px;
+      padding:9px 14px;font-weight:700;cursor:pointer">+ 单独会话</button>
   </div>
   <div style="font-size:13px">
     <span class="dot" id="dPc"></span><span id="tPc">对方离线</span>
@@ -221,17 +227,30 @@ pre{background:#0b1220;color:#dce7f8;padding:12px;border-radius:12px;overflow:au
     <h2>生成部署包 <span class="tag">现场打包 · 不经过任何第三方网盘</span></h2>
     <div class="body">
       <div class="form">
-        <label>房间号</label>
-        <input id="bRoom" maxlength="12" spellcheck="false">
+        <label>房间 / 会话</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="bRoom" maxlength="12" spellcheck="false" style="flex:1">
+          <button class="btn sm" id="btnUseLobby">用大厅</button>
+        </div>
+        <div class="full tip" style="margin:-2px 0 4px">
+          <b>lobby</b> = 默认大厅：装了这个包的机器都会出现在大厅里，不用一台台配房间号。
+          只想跟某一台单独聊，就先「+ 单独会话」再生成包。
+        </div>
         <label>目标系统</label>
         <select id="bPlat">
           <option value="win">Windows（.bat + PowerShell）</option>
           <option value="linux">Linux（.sh）</option>
         </select>
         <label>控制端 SSH 公钥</label>
-        <input id="bPub" placeholder="ssh-ed25519 AAAA... 粘贴进来，被控端就能免密登录">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="bPub" placeholder="点「生成」自动填，或粘贴 ssh-ed25519 AAAA..." style="flex:1">
+          <button class="btn sm g" id="btnKeygen">生成</button>
+        </div>
         <label>Tailscale authkey</label>
-        <input id="bAuth" placeholder="tskey-auth-... （可留空，留空则对方要手动登录一次）">
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="bAuth" placeholder="tskey-auth-... 可留空，之后在设备页远程补发" style="flex:1">
+          <button class="btn sm" id="btnGetAk">去拿</button>
+        </div>
         <label>回信到（用户）</label>
         <input id="bUser" placeholder="控制端的用户名，如 39969">
         <label>回信到（IP）</label>
@@ -257,17 +276,32 @@ pre{background:#0b1220;color:#dce7f8;padding:12px;border-radius:12px;overflow:au
 
   <div>
     <section class="card">
-      <h2>SSH 公钥从哪来</h2>
+      <h2>自动填本机信息 <span class="tag">跑一次，永久记住</span></h2>
       <div class="body">
         <div class="tip">
-          在你自己（控制端）电脑上跑一次就能拿到公钥，把整行粘到左边：
+          网页在云端，看不到你本机。在你<b>自己电脑</b>上跑一次下面这条命令，
+          你的 <b>Tailscale IP / 用户名 / SSH 公钥</b> 就自动填进左边（公钥没有就当场生成）：
         </div>
-        <pre id="keyCmd">ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
-type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
-        <button class="btn sm" id="btnCopyKey">复制</button>
-        <div class="tip" style="margin-top:12px">
-          留空也能部署，只是控制端 ssh 进去时要输一次对方开机密码。
+        <pre id="selfCmd">生成中…</pre>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn sm p" id="btnCopySelf">复制命令</button>
+          <button class="btn sm" id="btnPullSelf">我已跑完，拉回来</button>
+          <button class="btn sm" id="btnNewTok">换一个 token</button>
         </div>
+        <div class="tip" id="selfState" style="margin-top:10px">状态：还没收到上报</div>
+        <details class="api">
+          <summary>它到底做了什么 / 不想传怎么办</summary>
+          <pre id="keyCmd"># 等价的手工版本，可自己改：
+# 1) 生成密钥（没有的话）
+ssh-keygen -t ed25519 -N "" -f $env:USERPROFILE\.ssh\id_ed25519
+# 2) 看公钥，粘到左边
+type $env:USERPROFILE\.ssh\id_ed25519.pub
+# 3) 看本机 Tailscale IP，填到「回信到（IP）」
+& "C:\Program Files\Tailscale\tailscale.exe" ip -4
+
+# 上报内容只有：主机名、用户名、Tailscale IP、SSH 公钥。
+# authkey 默认不上传（脚本里那行是注释掉的），要传自己打开。</pre>
+        </details>
       </div>
     </section>
     <section class="card" style="margin-top:16px">
@@ -281,16 +315,44 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
 <!-- ==================== 视图 3：设备 / 远程清除 ==================== -->
 <div class="view" id="viewDev">
 <div class="grid">
+  <div>
   <section class="card">
-    <h2>已接入设备 <span class="tag">点「清除」即远程卸载</span></h2>
+    <h2>已接入设备 <span class="tag" id="devCount"></span></h2>
     <div class="body">
       <div id="devList"><div class="tip">加载中…</div></div>
-      <div style="margin-top:12px;display:flex;gap:10px">
+      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
         <button class="btn sm" id="btnRefreshDev">刷新</button>
-        <span class="tip" style="margin:0">在线设备才会立即执行清除；离线的会在下次开机收到。</span>
+        <button class="btn sm" id="btnForgetOld">清掉离线僵尸</button>
+        <span class="tip" style="margin:0">同一台机器只列一条（按最新心跳）；在线的立即执行，离线的下次开机收到。</span>
       </div>
     </div>
   </section>
+
+  <section class="card" style="margin-top:16px">
+    <h2>已有 SSH 连接 <span class="tag" id="brState">桥接未启动</span></h2>
+    <div class="body">
+      <div class="tip">
+        你 <b>~/.ssh/config</b> 里已经配好的机器直接列在这里 —— 对面哪怕从没装过本工具，
+        也能<b>直接远程装</b>（走 SSH，不用对方双击任何东西），装完就能对话。
+      </div>
+      <div id="sshList"><div class="tip">等待本机桥接上报…</div></div>
+      <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn sm" id="btnRefreshSsh">刷新</button>
+        <button class="btn sm" id="btnCopyBridge">复制启动命令</button>
+      </div>
+      <details class="api">
+        <summary>桥接是什么 / 启动命令</summary>
+        <pre id="bridgeCmd">生成中…</pre>
+        <div class="tip">
+          浏览器自己不能 SSH，所以这个桥接是跑在<b>你自己电脑上</b>的小进程：
+          读你的 ssh 配置 → 探测哪些连得上 → 列表上报给网页；
+          网页下发「部署 / 卸载」→ 它用 ssh/scp 去干。不常驻内存以外的东西，关掉窗口即停。
+        </div>
+      </details>
+    </div>
+  </section>
+  </div>
+
   <div>
     <section class="card">
       <h2>关于清除</h2>
@@ -301,6 +363,23 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
           <b>彻底清除</b>（红）：在上面基础上再退出 tailnet。对方会掉出你的网络，
           需要重新登录才能再连。<br><br>
           两条都会在对方机器上把本工具删干净，不留开机任务、不留公钥、不留安装目录。
+        </div>
+      </div>
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <h2>访问控制</h2>
+      <div class="body">
+        <div class="info"><span>你的出口 IP</span><b class="mono" id="aclMe">—</b></div>
+        <div id="aclIps" style="margin-top:8px"><div class="tip">加载中…</div></div>
+        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn sm" id="btnAclRefresh">刷新</button>
+          <button class="btn sm g" id="btnAclAddIp">记住本机 IP（30 天）</button>
+          <button class="btn sm" id="btnAclCode">换授权码</button>
+        </div>
+        <div class="tip" style="margin-top:10px">
+          进门有三条路：授权码（输一次给长期 Cookie）、授权 IP、设备令牌（打包时自动签发，
+          agent 靠它发心跳）。授权码只以 SHA-256 存，源码里看不到明文。
         </div>
       </div>
     </section>
@@ -317,9 +396,14 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
   var API = location.origin;
   var $ = function(id){ return document.getElementById(id); };
 
-  var room = localStorage.getItem('tsr_room') || '';
-  if(!room){ room = 'r' + Math.random().toString(36).slice(2,8); localStorage.setItem('tsr_room', room); }
+  var LOBBY = 'lobby';
+  // 默认进大厅: 所有不指定房间的机器都汇到这里, 不再一台一个随机房间号
+  var room = localStorage.getItem('tsr_room') || LOBBY;
   $('room').value = room;
+
+  // 本机 token: 控制端信息上报 + SSH 桥接共用
+  var TOK = localStorage.getItem('tsr_tok') || '';
+  if(!TOK){ TOK = Math.random().toString(36).slice(2,10); localStorage.setItem('tsr_tok', TOK); }
 
   var last = 0, timer = null, presence = {}, curRoom = '';
   var seen = {};                      // 已渲染过的消息 id
@@ -510,6 +594,12 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
   /* -------------------- 事件 -------------------- */
   $('btnSend').onclick = sendText;
   $('btnRoom').onclick = function(){ connect($('room').value); };
+  $('btnLobby').onclick = function(){ $('room').value = LOBBY; connect(LOBBY); };
+  $('btnNewRoom').onclick = function(){
+    var r = 'r' + Math.random().toString(36).slice(2,8);
+    $('room').value = r; connect(r);
+    toast('新会话 ' + r + '：用这个房间号生成部署包，就只有这台机器进来');
+  };
   $('txt').addEventListener('keydown', function(e){
     if(e.ctrlKey && e.key === 'Enter'){ sendText(); }
   });
@@ -540,7 +630,7 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
       $(VIEWS[k][0]).className = 'view' + (k === n ? ' on' : '');
       $(VIEWS[k][1]).className = (k === n ? 'on' : '');
     }
-    if(n === 'dev') loadDev();
+    if(n === 'dev'){ loadDev(); loadSsh(); loadAcl(); }
     window.scrollTo(0, 0);
   }
   $('tabChat').onclick  = function(){ showView('chat');  };
@@ -548,8 +638,126 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
   $('tabDev').onclick   = function(){ showView('dev');   };
 
   /* ==================== 生成部署包 ==================== */
-  $('bRoom').value = room;
-  $('bRelay').value = API;
+  /* 表单记忆: 填一次以后都自动带出来 */
+  var FORM_IDS = ['bRoom','bPub','bAuth','bUser','bHost','bPath','bRelay','bPlat'];
+  function loadForm(){
+    FORM_IDS.forEach(function(id){
+      var v = localStorage.getItem('tsr_f_' + id);
+      if(v !== null && v !== '') $(id).value = v;
+    });
+    if(!$('bRoom').value) $('bRoom').value = LOBBY;
+    if(!$('bRelay').value) $('bRelay').value = API;
+    if(!$('bPath').value)  $('bPath').value = 'Desktop';
+  }
+  function saveForm(){
+    FORM_IDS.forEach(function(id){ localStorage.setItem('tsr_f_' + id, $(id).value); });
+  }
+  loadForm();
+  FORM_IDS.forEach(function(id){ $(id).addEventListener('change', saveForm); });
+
+  $('btnUseLobby').onclick = function(){ $('bRoom').value = LOBBY; saveForm(); toast('已设为默认大厅'); };
+  $('btnGetAk').onclick = function(){
+    window.open('https://login.tailscale.com/admin/settings/keys', '_blank');
+    toast('Tailscale 后台 → Settings → Keys → Generate auth key');
+  };
+
+  /* ---------- 一键生成 SSH 密钥对 ---------- */
+  var lastPriv = '';
+  $('btnKeygen').onclick = function(){
+    $('btnKeygen').disabled = true; $('btnKeygen').textContent = '生成中…';
+    fetch(API + '/api/keygen', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ comment: 'ts-remote-control' }),
+    }).then(function(r){ return r.json(); })
+      .then(function(d){
+        if(!d.ok) throw new Error(d.error || '生成失败');
+        $('bPub').value = d.pub; saveForm();
+        lastPriv = d.priv;
+        $('bHint').innerHTML = '<b>密钥已生成</b>：公钥已填进上面，私钥已下载为 ' +
+          '<span class="mono">id_ed25519</span>（' + esc(d.fp || '') + '）。' +
+          '<br>把它放到 <span class="mono">%USERPROFILE%\\.ssh\\</span> 下，之后直接 ' +
+          '<span class="mono">ssh user@ip</span> 就能免密进对方机器。' +
+          '<br><b>私钥只出现这一次</b>，没保存就再点一次「生成」。';
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([d.priv], {type:'application/octet-stream'}));
+        a.download = 'id_ed25519';
+        document.body.appendChild(a); a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+        toast('密钥已生成，公钥已填，私钥已下载');
+      })
+      .catch(function(e){ toast('生成失败：' + e.message); })
+      .then(function(){ $('btnKeygen').disabled = false; $('btnKeygen').textContent = '生成'; });
+  };
+
+  /* ---------- 本机信息自动上报 ---------- */
+  /* 本机 token 必须在服务端登记过, 否则桥接/上报会被门禁当成陌生人挡掉 */
+  var tokReady = false;
+  function ensureTok(){
+    if(tokReady) return;
+    fetch(API + '/api/acl', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ addTok: TOK }),
+    }).then(function(r){ return r.json(); })
+      .then(function(d){ tokReady = !!(d && d.ok); })
+      .catch(function(){});
+  }
+
+  // ★ 命令里一律用单引号, 不出现 \" 转义 —— 反斜杠引号在不同调用方式下
+  //   (粘贴到 PowerShell / 从别的脚本里调) 解析结果不一样, 极容易静默失败。
+  function selfCommand(){
+    return 'powershell -NoProfile -ExecutionPolicy Bypass -Command "' +
+      "$t='" + TOK + "';$r='" + API + "';" +
+      "$p=$env:USERPROFILE + '/.ssh/id_ed25519';" +
+      "if(-not(Test-Path ($p + '.pub'))){ssh-keygen -t ed25519 -N '' -f $p | Out-Null};" +
+      "$pub=(Get-Content ($p + '.pub') -Raw).Trim();" +
+      "$ts='C:/Program Files/Tailscale/tailscale.exe';$ip='';" +
+      "if(Test-Path $ts){try{$ip=@(&$ts ip -4)[0]}catch{}};" +
+      "$b=@{token=$t;info=@{host=$env:COMPUTERNAME;user=$env:USERNAME;pub=$pub;tsip=$ip}}|ConvertTo-Json -Depth 5;" +
+      "Invoke-RestMethod -Uri ($r + '/api/ctrl?t=' + $t) -Method POST -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($b))|Out-Null;" +
+      "Write-Host 'OK 已上报'" +
+      '"';
+  }
+  function renderSelf(){
+    $('selfCmd').textContent = selfCommand();
+    $('bridgeCmd').textContent =
+      'curl -sSL ' + API + '/pkg/bridge.ps1?t=' + TOK + ' -o %TEMP%\\tsr-bridge.ps1 && ' +
+      'powershell -NoProfile -ExecutionPolicy Bypass -File %TEMP%\\tsr-bridge.ps1 ' +
+      '-Token ' + TOK + ' -Relay ' + API;
+  }
+  renderSelf();
+  ensureTok();
+
+  function pullSelf(){
+    $('selfState').textContent = '状态：正在拉…';
+    fetch(API + '/api/ctrl?token=' + encodeURIComponent(TOK) + '&t=' + encodeURIComponent(TOK), {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(!d.found){ $('selfState').textContent = '状态：还没收到上报（命令跑了吗？）'; return; }
+        var i = d.info || {};
+        if(i.pub)  { $('bPub').value = i.pub; }
+        if(i.user) { $('bUser').value = i.user; }
+        if(i.tsip) { $('bHost').value = i.tsip; }
+        saveForm();
+        $('selfState').innerHTML = '状态：<b style="color:#059669">已收到</b> — ' +
+          esc(i.host || '') + ' / ' + esc(i.user || '') + ' / IP ' + esc(i.tsip || '(没装 Tailscale)') +
+          '<br>公钥 ' + (i.pub ? '已填' : '没拿到') + '。已自动填进左边表单。';
+        toast('本机信息已填好');
+      })
+      .catch(function(e){ $('selfState').textContent = '状态：拉取失败 ' + e.message; });
+  }
+  $('btnPullSelf').onclick = pullSelf;
+  $('btnCopySelf').onclick = function(){
+    var t = $('selfCmd').textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+      .then(function(){ toast('已复制，粘贴到你本机 PowerShell 回车即可'); })
+      .catch(function(){ toast('复制失败，请手动选中'); });
+  };
+  $('btnNewTok').onclick = function(){
+    TOK = Math.random().toString(36).slice(2,10);
+    localStorage.setItem('tsr_tok', TOK);
+    renderSelf(); toast('已换新 token，命令要重新复制');
+  };
+  pullSelf();
   $('bDoc').textContent =
     '1) 左边填好房间号（和本页右上角一致）-> 点「生成 setup.zip」\n' +
     '2) 再点「下载一键部署.bat」（Linux 就下 .sh）\n' +
@@ -632,18 +840,33 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
           box.innerHTML = '<div class="tip">还没有设备上报过。先在对方机器上跑一次部署包。</div>';
           return;
         }
+        $('devCount').textContent = devCache.length + ' 台 · 在线 ' +
+          devCache.filter(function(x){ return x.online; }).length +
+          (d.stale ? ' · 僵尸 ' + d.stale : '');
         box.innerHTML = devCache.map(function(x, i){
+          var rooms = (x.rooms && x.rooms.length > 1) ? ('房间 ' + esc(x.room) + ' 等 ' + x.rooms.length + ' 个')
+                                                      : ('房间 ' + esc(x.room));
           return '<div class="devrow' + (x.online ? '' : ' off') + '"><div class="nm">' +
             '<b>' + esc(x.host || '(未知主机)') + '</b> ' +
             '<span class="pill ' + (x.online ? 'ok' : 'no') + '">' + (x.online ? '在线' : '离线') + '</span>' +
-            '<div>' + esc(x.user || '') + ' · ' + esc(x.ip || '') + ' · 房间 ' + esc(x.room) +
-            ' · ' + fmtTime(x.ts) + '</div>' +
-            '<div style="font-size:11px">' + esc(x.path || '') + '</div></div>' +
+            '<div>' + esc(x.user || '') + ' · ' + esc(x.ip || '无 IP') + ' · ' + rooms + '</div>' +
+            '<div style="font-size:11px">心跳 ' + fmtAgo(x.age) + '前' +
+              (x.path ? ' · ' + esc(x.path) : '') + '</div></div>' +
+            '<button class="btn sm" data-t="' + i + '">对话</button>' +
             '<button class="btn sm" data-i="' + i + '">要信息</button>' +
+            '<button class="btn sm" data-j="' + i + '">补入网</button>' +
             '<button class="btn sm" data-s="' + i + '" style="background:#d97706;color:#fff;border:none">清除</button>' +
             '<button class="btn sm" data-c="' + i + '" style="background:#dc2626;color:#fff;border:none">彻底清除</button>' +
             '</div>';
         }).join('');
+        var bt = box.querySelectorAll('button[data-t]');
+        for(var j3 = 0; j3 < bt.length; j3++){
+          bt[j3].onclick = (function(b){ return function(){
+            var d = devCache[+b.getAttribute('data-t')];
+            $('room').value = d.room; connect(d.room);
+            toast('已切到 ' + (d.host || d.room) + ' 所在的房间 ' + d.room);
+          }; })(bt[j3]);
+        }
         // 清除(保留入网)
         var bs = box.querySelectorAll('button[data-s]');
         for(var j = 0; j < bs.length; j++){
@@ -658,12 +881,153 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
         for(var k2 = 0; k2 < bi.length; k2++){
           bi[k2].onclick = (function(b){ return function(){ askInfo(devCache[+b.getAttribute('data-i')]); }; })(bi[k2]);
         }
+        var bj = box.querySelectorAll('button[data-j]');
+        for(var k4 = 0; k4 < bj.length; k4++){
+          bj[k4].onclick = (function(b){ return function(){ askJoin(devCache[+b.getAttribute('data-j')]); }; })(bj[k4]);
+        }
       })
       .catch(function(e){
         $('devList').innerHTML = '<div class="tip">加载失败：' + esc(e.message) + '</div>';
       });
   }
   $('btnRefreshDev').onclick = loadDev;
+  $('btnForgetOld').onclick = function(){
+    if(!window.confirm('清掉 24 小时没有心跳的设备记录？\n（只是从列表里消失，不影响对方机器）')) return;
+    fetch(API + '/api/forget', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({old:true}),
+    }).then(function(r){ return r.json(); })
+      .then(function(d){ toast('清掉了 ' + (d.deleted || 0) + ' 条僵尸记录'); loadDev(); })
+      .catch(function(e){ toast('清理失败：' + e.message); });
+  };
+
+  function fmtAgo(ms){
+    if(ms == null) return '—';
+    var s = Math.round(ms / 1000);
+    if(s < 60) return s + ' 秒';
+    if(s < 3600) return Math.round(s / 60) + ' 分钟';
+    if(s < 86400) return Math.round(s / 3600) + ' 小时';
+    return Math.round(s / 86400) + ' 天';
+  }
+
+  /* ==================== 已有 SSH 连接（本机桥接） ==================== */
+  var sshCache = [];
+  function loadSsh(){
+    fetch(API + '/api/bridge?token=' + encodeURIComponent(TOK) + '&t=' + encodeURIComponent(TOK), {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        sshCache = d.hosts || [];
+        $('brState').textContent = d.online ? ('桥接在线 · ' + sshCache.length + ' 台') : '桥接未启动';
+        $('brState').style.color = d.online ? '#059669' : '';
+        var box = $('sshList');
+        if(!sshCache.length){
+          box.innerHTML = '<div class="tip">' +
+            (d.online ? '桥接在线，但 ssh 配置里没探测到主机。'
+                      : '还没收到本机上报。点「复制启动命令」，在你自己电脑上跑一次。') + '</div>';
+          return;
+        }
+        box.innerHTML = sshCache.map(function(h, i){
+          return '<div class="devrow' + (h.ok ? '' : ' off') + '"><div class="nm">' +
+            '<b class="mono">' + esc(h.alias) + '</b> ' +
+            '<span class="pill ' + (h.ok ? 'ok' : 'no') + '">' + (h.ok ? '可连' : '连不上') + '</span>' +
+            '<div class="mono">' + esc(h.user ? (h.user + '@' + h.host) : h.host) +
+            (h.os ? ' · ' + esc(h.os) : '') + '</div>' +
+            '<div style="font-size:11px">' + esc(h.note || '') + '</div></div>' +
+            '<button class="btn sm g" data-d="' + i + '">装 agent</button>' +
+            '<button class="btn sm" data-p="' + i + '">探测</button>' +
+            '<button class="btn sm" data-r="' + i + '" style="background:#dc2626;color:#fff;border:none">卸载</button>' +
+            '</div>';
+        }).join('');
+        bindSsh(box);
+      })
+      .catch(function(e){
+        $('sshList').innerHTML = '<div class="tip">读取失败：' + esc(e.message) + '</div>';
+      });
+  }
+  function bindSsh(box){
+    var bd = box.querySelectorAll('button[data-d]');
+    for(var i = 0; i < bd.length; i++){
+      bd[i].onclick = (function(b){ return function(){
+        var h = sshCache[+b.getAttribute('data-d')];
+        var rm = window.prompt('装到哪台？房间号（直接回车 = 大厅 lobby）', LOBBY) || LOBBY;
+        bridgeTask(h.alias, 'deploy', { room: rm.trim() || LOBBY, pub: $('bPub').value.trim() },
+                   '已让桥接给 ' + h.alias + ' 装 agent（房间 ' + (rm.trim() || LOBBY) + '）');
+      }; })(bd[i]);
+    }
+    var bp = box.querySelectorAll('button[data-p]');
+    for(var j = 0; j < bp.length; j++){
+      bp[j].onclick = (function(b){ return function(){
+        var h = sshCache[+b.getAttribute('data-p')];
+        bridgeTask(h.alias, 'probe', {}, '探测 ' + h.alias + ' …');
+      }; })(bp[j]);
+    }
+    var br = box.querySelectorAll('button[data-r]');
+    for(var k = 0; k < br.length; k++){
+      br[k].onclick = (function(b){ return function(){
+        var h = sshCache[+b.getAttribute('data-r')];
+        if(!window.confirm('从 ' + h.alias + ' 上卸载远程工具？')) return;
+        bridgeTask(h.alias, 'remove', {}, '卸载指令已下发');
+      }; })(br[k]);
+    }
+  }
+  function bridgeTask(host, type, args, msg){
+    fetch(API + '/api/bridge/task', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ token: TOK, host: host, type: type, args: args || {}, t: TOK }),
+    }).then(function(r){ return r.json(); })
+      .then(function(d){
+        toast(d.ok ? msg : ('下发失败：' + (d.error || '')));
+        setTimeout(loadSsh, 2500);
+      })
+      .catch(function(e){ toast('下发失败：' + e.message); });
+  }
+  $('btnRefreshSsh').onclick = loadSsh;
+
+  /* ==================== 访问控制 ==================== */
+  function loadAcl(){
+    fetch(API + '/api/acl', {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        $('aclMe').textContent = d.me || '(拿不到)';
+        var ips = d.ips || [];
+        $('aclIps').innerHTML = ips.length
+          ? ips.map(function(x){
+              return '<div class="devrow"><div class="nm"><b class="mono">' + esc(x.ip) + '</b>' +
+                '<div>还剩 ' + x.days + ' 天</div></div>' +
+                '<button class="btn sm" data-ip="' + esc(x.ip) + '">移除</button></div>';
+            }).join('')
+          : '<div class="tip">没有记住任何 IP（现在靠授权码/Cookie 进门）</div>';
+        var bs = $('aclIps').querySelectorAll('button[data-ip]');
+        for(var i = 0; i < bs.length; i++){
+          bs[i].onclick = (function(b){ return function(){
+            fetch(API + '/api/acl', {method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ delIp: b.getAttribute('data-ip') })})
+              .then(function(){ loadAcl(); });
+          }; })(bs[i]);
+        }
+      })
+      .catch(function(e){ $('aclIps').innerHTML = '<div class="tip">加载失败：' + esc(e.message) + '</div>'; });
+  }
+  $('btnAclRefresh').onclick = loadAcl;
+  $('btnAclAddIp').onclick = function(){
+    fetch(API + '/api/acl', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ addIp: true })})
+      .then(function(r){ return r.json(); })
+      .then(function(d){ toast(d.ok ? ('已记住 ' + d.added) : '失败'); loadAcl(); });
+  };
+  $('btnAclCode').onclick = function(){
+    var c = window.prompt('新的授权码（只存哈希，不会明文保存）：');
+    if(!c) return;
+    fetch(API + '/api/acl', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ code: c })})
+      .then(function(r){ return r.json(); })
+      .then(function(d){ toast(d.ok ? '授权码已更换（下次要用新码登录）' : '失败'); });
+  };
+  $('btnCopyBridge').onclick = function(){
+    var t = $('bridgeCmd').textContent;
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+      .then(function(){ toast('已复制，在你本机 PowerShell 里跑'); })
+      .catch(function(){ toast('复制失败，请手动选中'); });
+  };
 
   function postCmd(d, cmd, extra){
     var body = { cmd: cmd };
@@ -689,6 +1053,19 @@ type %USERPROFILE%\.ssh\id_ed25519.pub</pre>
   function askInfo(d){
     postCmd(d, 'info').then(function(okd){
       toast(okd ? '已请求上报，切回「对话」看回执' : '下发失败');
+      showView('chat');
+    });
+  }
+  function askJoin(d){
+    // 打包时没填 authkey 的机器, 事后远程补发入网, 对方零交互
+    var k = $('bAuth').value.trim();
+    if(!k){
+      k = window.prompt('填 Tailscale authkey（tskey-auth-…）\n对方会用它在后台静默入网，不用点任何东西：');
+      if(!k) return;
+      $('bAuth').value = k; saveForm();
+    }
+    postCmd(d, 'join', { authkey: k }).then(function(okd){
+      toast(okd ? ('入网指令已发给 ' + (d.host || d.room) + '，切回「对话」看回执') : '下发失败');
       showView('chat');
     });
   }

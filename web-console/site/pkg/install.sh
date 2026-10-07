@@ -4,6 +4,8 @@
 set -e
 
 ROOM="__ROOM__"
+PTOK="__PTOK__"
+u() { if [ -n "$PTOK" ]; then case "$1" in *\?*) echo "$1&t=$PTOK" ;; *) echo "$1?t=$PTOK" ;; esac; else echo "$1"; fi }
 RELAY="__RELAY__"
 CTRL_USER="__CTRL_USER__"
 CTRL_HOST="__CTRL_HOST__"
@@ -117,6 +119,7 @@ if [ "$SCRIPT_DIR" != "$INSTALL_DIR" ] && [ -z "$DRY" ]; then
   cp -r "$SCRIPT_DIR/." "$INSTALL_DIR/"
   cat > "$INSTALL_DIR/agent.ini" <<EOF
 room=$ROOM
+token=$PTOK
 relay=$RELAY
 installdir=$INSTALL_DIR
 host=$(hostname)
@@ -160,7 +163,7 @@ if [ -z "$DRY" ]; then
   printf '%s' "$INFO" > "$INSTALL_DIR/info-$(hostname).txt"
   # ① 中继
   BODY=$(printf '%s' "$INFO" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{printf "%s\\n", $0}')
-  curl -s -m 20 -X POST "$RELAY/api/send" -H 'Content-Type: application/json' \
+  curl -s -m 20 -X POST "$(u "$RELAY/api/send")" -H 'Content-Type: application/json' \
        -d "{\"room\":\"$ROOM\",\"side\":\"pc\",\"kind\":\"sys\",\"body\":\"$BODY\"}" >/dev/null 2>&1 \
     && say "  [OK] 中继回传成功" || say "  [!] 中继回传失败"
   # ② scp 到控制端

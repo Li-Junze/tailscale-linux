@@ -21,6 +21,32 @@
 | 中继 API | https://ts-remote-web.pages.dev/api |
 | D1 数据库 | `ts-remote-db`（id `c191eac8-3fd8-4023-8030-c52eca8d2338`） |
 
+## ★ 访问控制（只有本人能用）
+
+`functions/_middleware.js` 是全站门禁，四条通道任一通过才放行：
+
+| 通道 | 说明 |
+|---|---|
+| 授权码 | 输对了下发长期 Cookie（180 天）。**只存 SHA-256，不存明文** |
+| 授权 IP | 登录页勾「记住这台 IP」，写进 D1，30 天有效 |
+| `btok` 令牌 | 你**本机**的桥接/上报通道，可看页面、可下载脚本 |
+| `tok` 设备令牌 | **打包时现场签发、烘焙进包里**，被控端靠它发心跳。只能调 `/api/*`，进不了页面 |
+
+★ 第三条是关键：**没有它，门禁会把被控端的心跳和消息一起挡掉，整条链路直接瘫痪。**
+`POST /api/build` 每生成一个包就签一个 `tok`；桥接部署时先向 `/api/tok` 要一个再写进
+`agent.ini`。所有 agent 请求自动带 `?t=<tok>`（`notify.ps1` 的 `Add-Tok`、
+`notify.sh` 的 `u()`）。
+
+未授权访问：页面请求返回登录页，`/api/*` 返回 `401 {"ok":false,"error":"unauthorized"}`。
+
+## ★ 大厅（lobby）模式
+
+不再一台机器一个随机房间号。**默认房间就是 `lobby`**：不指定房间的包全部汇进大厅，
+网页打开即在大厅里。想单独跟某一台聊，才点「+ 单独会话」生成新房间号再打包。
+
+设备列表按**主机名**去重合并（同一台机器在多个房间上报过只显示一条，取最新心跳），
+房间号取它当前正在听的那个——下发指令要发到对的房间。
+
 ## ★ 为什么不是 Workers，而是 Pages
 
 `*.workers.dev` 在国内被 **DNS 污染**（实测解析到 `75.126.150.210`、`2001::1f0d:5709`
@@ -58,8 +84,14 @@ Pages Functions 本身就是 Workers 运行时，能力完全一样，所以整�
 |---|---|---|
 | `GET /api` | — | 接口清单（自检用） |
 | `GET /api/hello` | — | 存活探测 |
-| `POST /api/build` | `{room,plat:win\|linux,relay?,ctrlUser?,ctrlHost?,ctrlPath?,pub?,authkey?}` | **现场生成部署包**，直接返回 zip 二进制流 |
-| `GET /api/devices` | — | 最近上报过的被控端列表（供网页远程清除） |
+| `POST /api/build` | `{room?,plat:win\|linux,relay?,ctrlUser?,ctrlHost?,ctrlPath?,pub?,authkey?}` | **现场生成部署包**，直接返回 zip 二进制流。room 留空=大厅；顺带签发设备令牌 |
+| `POST /api/keygen` | `{}` | 服务端生成 ed25519 密钥对 → `{pub,priv,fp}`，`priv` 是能直接给 ssh 用的 OpenSSH 私钥 |
+| `POST /api/tok` | — | 签发一个设备令牌（桥接给新机器装机时用） |
+| `GET/POST /api/acl` | 增/删授权 IP、登记本机令牌、换授权码 | 门禁管理 |
+| `GET /api/devices` | — | 被控端列表（按主机名去重，只留最新心跳） |
+| `POST /api/forget` | `{old:true}` 或 `{room}` | 清掉 24h 没心跳的僵尸 / 指定房间 |
+| `GET/POST /api/ctrl` | `?token=` | 控制端本机信息上报（IP/用户名/公钥自动填表单） |
+| `GET/POST /api/bridge`、`GET /api/bridge/tasks`、`POST /api/bridge/result` | 见下 | 已有 SSH 连接的桥接通道 |
 | `POST /api/send` | `{room,side,kind:text\|file\|cmd\|sys,body}` | 发一条消息 |
 | `POST /api/beat` | `{room,side,info:{host,user,ip,ver}}` | 心跳 + 上报机器信息（建议 15s） |
 | `GET /api/pull` | `?room=&after=` | 增量拉消息 → `{msgs,files,presence}` |
@@ -82,6 +114,28 @@ Pages Functions 本身就是 Workers 运行时，能力完全一样，所以整�
 | `{"cmd":"restart"}` | agent 自我重启 |
 | `{"cmd":"cleanup"}` | 卸载：移除开机任务 → 撤销公钥 → 退出 tailnet → 删除安装目录 |
 | `{"cmd":"cleanup","keepTailscale":true}` | 同上，但**保留** tailnet 入网 |
+| `{"cmd":"join","authkey":"tskey-…"}` | 远程补入网：打包时没填 authkey 也能事后静默拉进 tailnet，对方零交互 |
+
+## 已有 SSH 连接（本机桥接）
+
+浏览器自己不能 SSH，所以 `site/pkg/bridge.ps1` 跑在**你自己电脑**上：
+读 `~/.ssh/config` → 并发探测哪些连得上 → 上报网页 → 网页下发
+「装 agent / 探测 / 卸载」→ 它用 ssh/scp 去干 → 结果回传。
+
+```powershell
+curl -sSL https://ts-remote-web.pages.dev/pkg/bridge.ps1?t=<token> -o %TEMP%\tsr-bridge.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File %TEMP%\tsr-bridge.ps1 -Token <token>
+```
+
+这样对面哪怕从没装过本工具，也能直接远程装上（不用对方双击任何东西）。
+
+★ 两个坑（都踩过，别改回去）：
+
+1. **远程命令不能含 `>` `|` `&`**——Windows 的 ssh 会直接报"系统找不到指定的路径"
+   且 rc=1。所以部署一律先 `scp` 上传脚本，再执行一句没有元字符的命令
+   （如 `sh tsr-boot.sh`）。
+2. **ssh 要用 `C:\Windows\System32\OpenSSH\ssh.exe`**。`Get-Command ssh` 常常先命中
+   PortableGit 的 ssh，非交互启动时一个字都不输出，探测永远失败。
 
 ## 一键部署的完整流程
 
